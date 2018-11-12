@@ -17,7 +17,6 @@ import sys
 import subprocess
 import linecache
 import numpy as np
-import scipy.interpolate as si
 import scipy.optimize as so
 import scipy.constants as sc
 import scipy.signal as sg 
@@ -103,21 +102,33 @@ batch_header_ela =  '# Specify jobname:\n'\
 batch_header_tdep = '# Specify jobname:\n'\
                     '#SBATCH --job-name=tdep\n'\
                     '# Specify the number of nodes and the number of CPU (tasks) per node:\n'\
-                    '#SBATCH --nodes=4  --ntasks-per-node=16\n'\
+                    '#SBATCH --nodes=2  --ntasks-per-node=16\n'\
                     '#SBATCH --account=nn2615k\n'\
                     '# The maximum time allowed for the job, in hh:mm:ss\n'\
-                    '#SBATCH --time=48:00:00\n'\
+                    '#SBATCH --time=4:00:00\n'\
                     '#SBATCH --mem-per-cpu=2000M\n'\
                     '#SBATCH --exclusive\n'\
                     '#SBATCH --mail-user=Nicholas.pike@smn.uio.no\n'\
-                    '#SBATCH --mail-type=ALL'               
+                    '#SBATCH --mail-type=ALL'      
+                    
+batch_header_gs  =  '# Specify jobname:\n'\
+                    '#SBATCH --job-name=tdepconfig\n'\
+                    '# Specify the number of nodes and the number of CPU (tasks) per node:\n'\
+                    '#SBATCH --nodes=4  --ntasks-per-node=16\n'\
+                    '#SBATCH --account=nn2615k\n'\
+                    '# The maximum time allowed for the job, in hh:mm:ss\n'\
+                    '#SBATCH --time=12:00:00\n'\
+                    '#SBATCH --mem-per-cpu=1800M\n'\
+                    '#SBATCH --exclusive\n'\
+                    '#SBATCH --mail-user=Nicholas.pike@smn.uio.no\n'\
+                    '#SBATCH --mail-type=ALL'                  
     
 """
 ##############################################################################
 VASP parameters. Make sure you change convergence parameters before doing your calculation
 ##############################################################################
 """
-ecut     = '500' #value in eV
+ecut     = '500'  #value in eV
 ediff    = '1E-7' #value in Hartree    
 kdensity = 5        
 
@@ -126,7 +137,7 @@ kdensity = 5
 TDEP parameters. These parameters may need to be converged.
 ##############################################################################
 """
-natom_ss  = '200'       #number of atoms in the supercell
+natom_ss  = '100'       #number of atoms in the supercell (metals ~100, semiconductor ~200])
 rc_cut    = '100'       #second order cut-off radius (100 defaults to the maximum radius)
 tmin      = '0'         #minimum temperature
 tmax      = '3000'      #maximum temperature
@@ -134,7 +145,9 @@ tsteps    = '1500'      #number of temperature steps
 qgrid     = '30 30 30'  #q point grid density for DOS
 iter_type = '3'         #method for numerical integration
 n_configs = '12'        #number of configurations
-t_configs = '300'       #temperature of configurations
+t_configs = '1000'      #temperature of configurations (for better calculations of the 
+                        # CTE please keep the configuration temperature approximently 
+                        # equal to the debye temperture)
 
 """
 ##############################################################################
@@ -149,7 +162,7 @@ __root__ = os.getcwd()
 """
 Begin modules used in this program
 """
-def main_thermal(DFT_INPUT,withbounds):
+def main_thermal(DFT_INPUT,tags):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -170,7 +183,7 @@ def main_thermal(DFT_INPUT,withbounds):
     #calculation of lattice expansion coefficients.        
     print('Launching calculation of  the coefficients of thermal expansion.')
     #launch calculation of linear expansion coefficients
-    cell_data = linear_exp(cell_data,withbounds)
+    cell_data = linear_exp(cell_data,tags)
     print('Calculation of the coefficients of thermal expansion are complete\n')    
     
     return None
@@ -263,7 +276,7 @@ def READ_INPUT_DFT(DFT_INPUT):
     
     return cell_data
 
-def linear_exp(cell_data,withbounds):
+def linear_exp(cell_data,tags):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -273,12 +286,19 @@ def linear_exp(cell_data,withbounds):
     
     Output: modified cell_data with linear expansion coefficients
     """
+    #split tags
+    withbounds = tags[0]
+    #withsolver = tags[1]
+    #withBEC    = tags[2]
+    withDFTU0  = tags[3]
+
     #initialize variables
     a0              = cell_data[1]/ang_to_m
     b0              = cell_data[2]/ang_to_m
     c0              = cell_data[3]/ang_to_m
     mass            = cell_data[5]
   
+    #quick calculations of variables
     total_mass = 0.0
     for i in range(1,len(mass),2):
         total_mass += float(mass[i])
@@ -294,19 +314,19 @@ def linear_exp(cell_data,withbounds):
         latt_array,vol_array,engy_array,free_array,cell_data = read_free_energies(volnum,num_unique,cell_data)
                
         #step 2: determine the lattice parameters that minimize the temperature
-        latt_data,cell_data = minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,withbounds)
+        latt_data,cell_data = minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,withbounds,withDFTU0)
         
         #step 3: Fit the equation of state
         bulkT,cell_data = fit_EOS(volnum,num_unique,cell_data,engy_array,free_array,vol_array,withbounds)
         
         #step 4: Calculate coefficients of thermal expansion
-        latt_der,cell_data = find_CTE(volnum,num_unique,cell_data,latt_data)
+        lattder,cell_data = find_CTE(volnum,num_unique,cell_data,latt_data)
         
         #step 5: Calculate specific heat at constant pressure
-        sheat,cell_data = find_CP(volnum,num_unique,cell_data,latt_der,bulkT,total_mass)
+        sheat,cell_data = find_CP(volnum,num_unique,cell_data,lattder,bulkT,total_mass)
         
         #step 6: print all calculations to a file
-        print_all(volnum,num_unique,cell_data,free_array,latt_data,latt_der,bulkT,sheat)
+        print_all(volnum,num_unique,cell_data,free_array,latt_data,lattder,bulkT,sheat)
             
                 
         """
@@ -319,19 +339,19 @@ def linear_exp(cell_data,withbounds):
         latt_array,vol_array,engy_array,free_array,cell_data = read_free_energies(volnum,num_unique,cell_data)
         
         #step 2: determine the lattice parameters that minimize the temperature
-        latt_data,cell_data = minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,withbounds)
+        latt_data,cell_data = minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,withbounds,withDFTU0)
                        
         #step 3: Fit the equation of state
         bulkT,cell_data = fit_EOS(volnum,num_unique,cell_data,engy_array,free_array,vol_array,withbounds)
             
         #step 4: Calculate coefficients of thermal expansion
-        latt_der, cell_data = find_CTE(volnum,num_unique,cell_data,latt_data)
+        lattder, cell_data = find_CTE(volnum,num_unique,cell_data,latt_data)
 
         #step 5: Calculate specific heat at constant pressure
-        sheat,cell_data = find_CP(volnum,num_unique,cell_data,latt_der,bulkT,total_mass)
+        sheat,cell_data = find_CP(volnum,num_unique,cell_data,lattder,bulkT,total_mass)
                 
         #step 6: print all calculations to a file
-        print_all(volnum,num_unique,cell_data,free_array,latt_data,latt_der,bulkT,sheat)
+        print_all(volnum,num_unique,cell_data,free_array,latt_data,lattder,bulkT,sheat)
         
     return cell_data
 
@@ -354,12 +374,14 @@ def read_free_energies(volnum,num_unique,cell_data):
     files           = cell_data[19]
     
     print('   1 - Reading in the free energy files for each lattice grid')
+    found_unstable = False
+    unstable_files = []
+    unstable_numbs = []
     if num_unique == 1:
         i = 0
         for file in files:
             #use the file name to determine the lattice constants
             l = file.split('_')
-            index1 = int(l[2][-1:])
             latt_array[i][0] = float(l[3]) # a lattice
             engy_array[i][0] = float(l[6]) # U_0 (a)
             vol_array        = np.append(vol_array,float(l[7])) #volume
@@ -376,9 +398,13 @@ def read_free_energies(volnum,num_unique,cell_data):
                     l = line.strip('\n').split()
                     if l[1] != 'NaN':
                         free_array[i][num] = float(l[1])
-                    else:
-                        print('ERROR: Free energy calculation for %i did not converge. Relaunch this calculation.'%(index1))
-                        sys.exit()
+                    if float(l[1]) > 3.0E8:
+                        print('   ERROR: Free energy calculation for %i may have an instability. Will relaunch at end.'%i)
+                        print('   Suggestion: Plot the dispersion relation to view the instability.')
+                        found_unstable = True
+                        unstable_files = np.append(unstable_files,files)
+                        unstable_numbs = np.append(unstable_numbs,i)
+                        
             i+=1
                 
     elif num_unique == 2:
@@ -386,7 +412,6 @@ def read_free_energies(volnum,num_unique,cell_data):
         for file in files:
             #use the file name to determine the lattice constants
             l = file.split('_')
-            index1 = int(l[2][-1:])
             latt_array[i][0] = float(l[3]) # a lattice
             latt_array[i][1] = float(l[5]) # c lattice
             engy_array[i][0] = float(l[6]) # U_0 (a)
@@ -404,14 +429,21 @@ def read_free_energies(volnum,num_unique,cell_data):
                     l = line.strip('\n').split()
                     if l[1] != 'NaN':
                         free_array[i][num] = float(l[1])
-                    else:
-                        print('ERROR: Free energy calculation for %i did not converge. Relaunch this calculation.'%(index1))
-                        sys.exit()
+                    if float(l[1]) > 3.0E8:
+                        print('   ERROR: Free energy calculation for %i may have an instability. Will relaunch at end.'%i)
+                        print('   Suggestion: Plot the dispersion relation to view the instability.')                        
+                        found_unstable = True
+                        unstable_files = np.append(unstable_files,files)
+                        unstable_numbs = np.append(unstable_numbs,i)
+
             i+=1
+    if found_unstable == True:
+        relaunch_configs(unstable_numbs,unstable_files)
+        sys.exit()
                               
     return latt_array,vol_array,engy_array,free_array,cell_data
 
-def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,withbounds):
+def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,withbounds,withDFTU0):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -437,7 +469,14 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
     print('   2 - Generating the fits for each temperature and \n'\
           '       finding the minimum set of coordinates.')
     print('       ---Brief pauses are normal---')
+    
     if num_unique == 1:
+        if withbounds == True:
+            print('       Bounds are being used.')
+            
+        if withDFTU0 == True:
+            print('       Internal energy from DFT is being used.')
+            
         for i in range(int(volnum)):
             x = np.append(x,latt_array[i][0])
                 
@@ -457,7 +496,10 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
         for i in range(tempsteps):
             z         = []
             for j in range(int(volnum)):
-                z = np.append(z,(engy_array[j][0]+numatoms*free_array[j][i]))  #Add internal energy to each point.
+                if withDFTU0 == True:
+                    z = np.append(z,(engy_array[j][0]+numatoms*free_array[j][i]))  #Add internal energy to each point.
+                else:
+                    z = np.append(z,(numatoms*(engy_array[j][0]+free_array[j][i])))  #Add internal energy to each point.
             
             #internal test that they are all the same length
             try:
@@ -525,6 +567,12 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
             latt_data[1][i] = result.x[0]
             
     elif num_unique == 2:
+        if withbounds == True:
+            print('       Bounds are being used.')
+            
+        if withDFTU0 == True:
+            print('       Internal energy from DFT is being used.')
+                    
         for i in range(int(volnum)):
             x = np.append(x,latt_array[i][0])
             y = np.append(y,latt_array[i][1])   
@@ -544,35 +592,50 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
         print('       total number of extrapulation points: %s' %(density*density))       
         
         #generate list of coordinates for each temperature   
+        fitparams = []
         for i in range(tempsteps):
             z = []
             for j in range(int(volnum)):
-                z = np.append(z,(engy_array[j][0]+numatoms*free_array[j][i]))  #Add internal energy to each point.
-            
+                if withDFTU0 == True:
+                    z = np.append(z,(engy_array[j][0]+numatoms*free_array[j][i]))  #Add internal energy to each point.
+                else:
+                    z = np.append(z,(numatoms*(engy_array[j][0]+free_array[j][i])))  #Add internal energy to each point.
+                        
             #internal test that they are all the same length
             try:
-                x.shape[0] == y.shape [0] == z.shape[0]
+                x.shape[0] == y.shape[0] == z.shape[0]
             except:
                 print('ERROR: The dimensions of either x,y, or z are unequal.')
                 print('The dimensions of the arrays are %s %s %s.'%(x.shape[0],y.shape[0],z.shape[0]))
                 sys.exit()
                 
+            if i == 0:
+                p0 = np.ones(49)
+            else:
+                p0 = fitparams
+            
+            fitparams, fitcov = so.curve_fit(twelththorder_ploy,[x,y],z,p0 = p0)
+            
+            print(fitparams)
+            
+            sys.exit()
+                
             #find best fit 6th order fit             
-            A = np.c_[x*0.0+1.0,x, x**2,x**3,x**4,x**5,x**6,
-                          y,x*y, x**2*y,x**3*y,x**4*y,x**5*y,x**6*y,
-                          y**2,x*y**2, x**2*y**2,x**3*y**2,x**4*y**2,x**5*y**2,x**6*y**2,
-                          y**3,x*y**3, x**2*y**3,x**3*y**3,x**4*y**3,x**5*y**3,x**6*y**3,
-                          y**4,x*y**4, x**2*y**4,x**3*y**4,x**4*y**4,x**5*y**4,x**6*y**4,
-                          y**5,x*y**5, x**2*y**5,x**3*y**5,x**4*y**5,x**5*y**5,x**6*y**5,
-                          y**6,x*y**6, x**2*y**6,x**3*y**6,x**4*y**6,x**5*y**6,x**6*y**6]
+#            A = np.c_[x**0*y**0, x**1*y**0, x**2*y**0, x**3*y**0, x**4*y**0, x**5*y**0, x**6*y**0,
+#                      x**0*y**1, x**1*y**1, x**2*y**1, x**3*y**1, x**4*y**1, x**5*y**1, x**6*y**1,
+#                      x**0*y**2, x**1*y**2, x**2*y**2, x**3*y**2, x**4*y**2, x**5*y**2, x**6*y**2,
+#                      x**0*y**3, x**1*y**3, x**2*y**3, x**3*y**3, x**4*y**3, x**5*y**3, x**6*y**3,
+#                      x**0*y**4, x**1*y**4, x**2*y**4, x**3*y**4, x**4*y**4, x**5*y**4, x**6*y**4,
+#                      x**0*y**5, x**1*y**5, x**2*y**5, x**3*y**5, x**4*y**5, x**5*y**5, x**6*y**5,
+#                      x**0*y**6, x**1*y**6, x**2*y**6, x**3*y**6, x**4*y**6, x**5*y**6, x**6*y**6]
             
             #C contains the coefficients to the polynomial we are trying to fit. 
             # if statement added to handle bad behavior in older versions of numpy
-            try: 
-                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1)
-                 
-            except FutureWarning:
-                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1) 
+#            try: 
+#                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1)
+#                 
+#            except FutureWarning:
+#                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1) 
             
             #now that we have the coefficients, we can make a much denser grid to find the 
             #minimum value.
@@ -615,22 +678,13 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
             else:
                 initial_guess = [latt_data[1][i-1],latt_data[2][i-1]]
 
-            niter         = 100 # number of basin hopping steps
-            stepsize      = 0.5 # initial step size for the random displacement
-            niter_success = 2   # number of iterations in which the global minimum can be the same
-            
             if withbounds == True:
-                bounds        = [(xmin,xmax),(ymin,ymax)] #bounds of free energy grid
-            
-                result = so.basinhopping(twelththorder_ploy,initial_guess, niter = niter,
-                                           stepsize = stepsize, 
-                                           minimizer_kwargs = {'args':C,'method':'L-BFGS-B','bounds': bounds},
-                                           disp = False, niter_success = niter_success)
-            else: 
-                result = so.basinhopping(twelththorder_ploy,initial_guess, niter = niter,
-                                           stepsize = stepsize, 
-                                           minimizer_kwargs = {'args':C,'method':'BFGS'},
-                                           disp = False, niter_success = niter_success)
+                bounds    = [(xmin,xmax),(ymin,ymax)] #bounds of free energy grid
+                result    = so.minimize(twelththorder_ploy,initial_guess,args=(C),
+                                     method='L-BFGS-B',bounds = bounds)
+            else:
+                result    = so.minimize(twelththorder_ploy,initial_guess,args=(C),
+                                     method='BFGS')
 
             #gather results from optimization routine
             latt_data[0][i] = Tmin+(Tmax-Tmin)/tempsteps*i
@@ -662,6 +716,10 @@ def fit_EOS(volnum,num_unique,cell_data,engy_array,free_array,vol_array,withboun
     
     print('   3 - Fitting the equations of state.' )
     print('       ---Brief pauses are normal---')
+    if withbounds == True:
+        print('       Bounds are being used.')
+    
+    plsq2 = []
     for i in range(tempsteps):
         z     = []
         for j in range(int(volnum)):
@@ -682,15 +740,19 @@ def fit_EOS(volnum,num_unique,cell_data,engy_array,free_array,vol_array,withboun
             E0 = 0 #reference energy (should be negative and in eV)
         else:
             E0 = z[0] #reference energy (should be negative and in eV)
-        B0 = float(cell_data[27]/(10*160.21765))      #guess at bulk modulus 
-        BP = 5.0       #guess at pressure dependence of bulk modulus
-        V0 = a0*b0*c0  #guess for initial volume (in Å^3)
-        x0 = np.array([E0,B0,BP,V0],dtype=float)
+        
+        if i == 0:
+            B0 = float(cell_data[27]/(10*160.21765))      #guess at bulk modulus 
+            BP = 5.0       #guess at pressure dependence of bulk modulus
+            V0 = a0*b0*c0  #guess for initial volume (in Å^3)
+            x0 = np.array([E0,B0,BP,V0],dtype=float)
+        else:
+            x0 = plsq2
         
         if withbounds == True:
-            bounds = ((-1000,B0*0.5,0,V0*0.6),(0,B0*4.0,15,V0*1.5))
+            bounds = ((-1000,B0*0.5,0,V0*0.6),(0,B0*1.5,15,V0*1.2))
         else:
-            bounds = None
+            bounds = ((-np.inf,-np.inf,-np.inf,-np.inf),( np.inf,np.inf,np.inf,np.inf))
             
         #determine the least squared fit parameters
         try:
@@ -735,19 +797,16 @@ def find_CTE(volnum,num_unique,cell_data,latt_data):
     Return:  
     """
     #declare useful information
-    window1   = 301 # must be odd, size of the data array to consider at one point
-    window2   = 401 # must be odd, size of the data array to consider at one point
-    polyorder = 3   # must be less than the window
-    tempsteps       = int(cell_data[25])
+    window1    = 301 # must be odd, size of the data array to consider at one point
+    polyorder  = 3   # must be less than the window
+    tempsteps  = int(cell_data[25])
    
     #declare arrays
     xdata = latt_data[0][:] #temperature
     adata = latt_data[1][:] #a lattice
     cdata = latt_data[2][:] #c lattice 
-    logadata        = np.zeros(shape=(tempsteps))
-    logcdata        = np.zeros(shape=(tempsteps))
     latt_der        = np.zeros(shape=(4,tempsteps)) 
-    lattdata        = np.zeros(shape=(int(tempsteps),9))
+    lattdata        = np.zeros(shape=(tempsteps,9))
  
     print('   4 - Calculate the coefficients of thermal expansion.') 
     if num_unique == 1:
@@ -757,17 +816,14 @@ def find_CTE(volnum,num_unique,cell_data,latt_data):
         print('      window    %s'%window1)
         print('      polyorder %s'%polyorder)
         ahat = sg.savgol_filter(adata,window1,polyorder)
-                
-        #fit a spline to the log of the lattice constant
-        for i in range(len(adata)):
-            logadata[i] = np.log(ahat[i])
-
-        #use gradient
-        agrad = np.gradient(logadata,xdata[1]-xdata[0])
-             
-        #smooth gradient
-        dera = sg.savgol_filter(agrad,window2,polyorder)        
-                                
+               
+        # take derivative of ahat using a gradient        
+        dera = np.gradient(ahat)
+        
+        #divide by the lattice parameter itself
+        for i in range(len(ahat)):
+            dera[i] = dera[i]/ahat[i]
+        
         for i in range(int(tempsteps)):
             latt_der[0][i] = xdata[i]
             latt_der[1][i] = dera[i]
@@ -796,28 +852,16 @@ def find_CTE(volnum,num_unique,cell_data,latt_data):
         print('      polyorder %s'%polyorder)
         ahat = sg.savgol_filter(adata,window1,polyorder)
         chat = sg.savgol_filter(cdata,window1,polyorder)
-        latt_data[1][:] = ahat
-        latt_data[2][:] = chat
-                
-        #fit a spline to the log of the lattice constant
-        for i in range(len(adata)):
-            logadata[i] = np.log(ahat[i])
-            logcdata[i] = np.log(chat[i])
-            
-        #remove someday when I know that the spline is wrong
-        #use a spline to determine the derivative 
-        #spl = si.UnivariateSpline(xdata,logadata,k=5,s=1)
-        #der = spl.derivative(n=1)
-        #dera = der(xdata) 
+                                    
+        # take derivative of ahat using a gradient
+        dera = np.gradient(ahat)
+        derc = np.gradient(chat)
         
-        #use gradient
-        agrad = np.gradient(logadata,xdata[1]-xdata[0])
-        cgrad = np.gradient(logcdata,xdata[1]-xdata[0])
-             
-        #smooth gradient
-        dera = sg.savgol_filter(agrad,window2,polyorder)        
-        derc = sg.savgol_filter(cgrad,window2,polyorder)
-                                
+        #divide by the lattice parameter itself
+        for i in range(len(ahat)):
+            dera[i] = dera[i]/ahat[i]
+            derc[i] = derc[i]/chat[i]
+                               
         for i in range(int(tempsteps)):
             latt_der[0][i] = xdata[i]
             latt_der[1][i] = dera[i]
@@ -843,9 +887,9 @@ def find_CTE(volnum,num_unique,cell_data,latt_data):
     #save lattice expansion coefficients to cell_data for use by the rest of the program
     cell_data[10] = lattdata  
         
-    return latt_der,cell_data
+    return lattdata,cell_data
 
-def find_CP(volnum,num_unique,cell_data,latt_der,bulkT,total_mass):
+def find_CP(volnum,num_unique,cell_data,lattder,bulkT,total_mass):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -865,7 +909,7 @@ def find_CP(volnum,num_unique,cell_data,latt_der,bulkT,total_mass):
     foundfile       = False
         
     #declare arrays
-    sheat           = np.empty(shape=(tempsteps,3))
+    sheat           = np.zeros(shape=(3,tempsteps))
 
     print('   5 - Calculate Cp.')
     if num_unique == 1:
@@ -886,20 +930,21 @@ def find_CP(volnum,num_unique,cell_data,latt_der,bulkT,total_mass):
             for num,line in enumerate(f,0):
                 l = line.strip('\n').split()
                 #this file contains 0- temperature, 1- vibrational free energy, 2- entropy, 3- specific heat
-                sheat[i][0] = float(l[0])
-                sheat[i][1] = float(l[3])
+                sheat[0][i] = float(l[0])
+                sheat[1][i] = float(l[3])
                 i += 1
         
         #determine cp using thermodynamics
-        for i in range(sheat.shape[0]):
-            alphaavg    = (latt_der[1][i] + latt_der[1][i]+ latt_der[1][i])/3.0
-            sheat[i][2] = sheat[i][1] + vol*sheat[i][0]*alphaavg**2*bulkT[2][i]*J_to_cal/total_mass
+        for i in range(sheat.shape[1]):
+            alphaavg    = (lattder[i][0] + lattder[i][4]+ lattder[i][8])/3.0
+            sheat[2][i] = sheat[1][i] + vol*sheat[0][i]*alphaavg**2*bulkT[2][i]*J_to_cal/total_mass
+
         # plot cp and cv vs temperature 
         if plotfigs:           
             fig = plt.figure()
             ax = fig.gca(projection=None)
-            ax.plot(sheat[:][0],sheat[:][1],c='r')
-            ax.plot(sheat[:][0],sheat[:][2],c='b')
+            ax.plot(sheat[0][:],sheat[1][:],c='r')
+            ax.plot(sheat[0][:],sheat[2][:],c='b')
             plt.xlabel('Temperature (T)')
             plt.ylabel('cv,cp (cal/gK)')
             ax.axis('equal')
@@ -927,21 +972,21 @@ def find_CP(volnum,num_unique,cell_data,latt_der,bulkT,total_mass):
             for num,line in enumerate(f,0):
                 l = line.strip('\n').split()
                 #this file contains 0- temperature, 1- vibrational free energy, 2- entropy, 3- specific heat
-                sheat[i][0] = float(l[0])
-                sheat[i][1] = float(l[3])
+                sheat[0][i] = float(l[0])
+                sheat[1][i] = float(l[3])
                 i += 1
         
         #determine cp using thermodynamics
-        for i in range(sheat.shape[0]):
-            alphaavg = (latt_der[1][i] + latt_der[1][i]+ latt_der[2][i])/3.0
-            sheat[i][2] = sheat[i][1] + vol*sheat[i][0]*alphaavg**2*bulkT[2][i]*J_to_cal/total_mass
+        for i in range(sheat.shape[1]):
+            alphaavg    = (lattder[i][0] + lattder[i][4]+ lattder[i][8])/3.0
+            sheat[2][i] = sheat[1][i] + vol*sheat[0][i]*alphaavg**2*bulkT[2][i]*J_to_cal/total_mass
 
         # plot cp and cv vs temperature 
         if plotfigs:           
             fig = plt.figure()
             ax = fig.gca(projection=None)
-            ax.plot(sheat[:][0],sheat[:][1],c='r')
-            ax.plot(sheat[:][0],sheat[:][2],c='b')
+            ax.plot(sheat[0][:],sheat[1][:],c='r')
+            ax.plot(sheat[0][:],sheat[2][:],c='b')
             plt.xlabel('Temperature (T)')
             plt.ylabel('cv,cp (cal/gK)')
             ax.axis('equal')
@@ -952,7 +997,7 @@ def find_CP(volnum,num_unique,cell_data,latt_der,bulkT,total_mass):
     
     return sheat,cell_data
 
-def print_all(volnum,num_unique,cell_data,free_array,latt_data,latt_der,bulkT,sheat):
+def print_all(volnum,num_unique,cell_data,free_array,latt_data,lattder,bulkT,sheat):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -986,6 +1031,17 @@ def print_all(volnum,num_unique,cell_data,free_array,latt_data,latt_der,bulkT,sh
     
     #generate gnuplot file 
     gen_GNUPLOT(freefilename,'free_energy_total.gnuplot',int(volnum),'free_energy') 
+    
+    #print this data to a file
+    f1= open('out.expansion_coeffs','w')
+    f1.write('# expansion coefficients \n#temp \t a \n' )
+    for i in range(latt_data.shape[1]):
+        f1.write('%s \t%s \t%s \t%s \t%s \t%s \t%s \t%s \t%s \t%s\n'
+                 %(latt_data[0][i],
+                   lattder[i][0],lattder[i][1],lattder[i][2],
+                   lattder[i][3],lattder[i][3],lattder[i][5],
+                   lattder[i][6],lattder[i][7],lattder[i][8])) 
+    f1.close()
         
     if num_unique == 1:
         #now that the minimum coordinates have been found we can print them to a file
@@ -997,14 +1053,7 @@ def print_all(volnum,num_unique,cell_data,free_array,latt_data,latt_der,bulkT,sh
         
         #generate gnuplot file 
         gen_GNUPLOT('out.thermal_expansion','thermal_expansion.gnuplot',2,'thermal_lattice')
-        
-        #print this data to a file
-        f1= open('out.expansion_coeffs','w')
-        f1.write('# expansion coefficients \n#temp \t a \n' )
-        for i in range(latt_der.shape[1]):
-            f1.write('%s \t%s\n' %(latt_der[0][i],latt_der[1][i])) 
-        f1.close()
-        
+               
         #generate gnuplot file 
         gen_GNUPLOT('out.expansion_coeffs','expansion_coeffs.gnuplot',2,'expansion')
         
@@ -1018,14 +1067,7 @@ def print_all(volnum,num_unique,cell_data,free_array,latt_data,latt_der,bulkT,sh
         
         #generate gnuplot file 
         gen_GNUPLOT('out.thermal_expansion','thermal_expansion.gnuplot',3,'thermal_lattice')
-        
-        #print this data to a file
-        f1= open('out.expansion_coeffs','w')
-        f1.write('# expansion coefficients \n#temp \t a \t c \n' )
-        for i in range(latt_der.shape[1]):
-            f1.write('%s \t%s \t%s\n' %(latt_der[0][i],latt_der[1][i],latt_der[2][i])) 
-        f1.close()
-        
+                
         #generate gnuplot file 
         gen_GNUPLOT('out.expansion_coeffs','expansion_coeffs.gnuplot',3,'expansion')
         
@@ -1043,8 +1085,8 @@ def print_all(volnum,num_unique,cell_data,free_array,latt_data,latt_der,bulkT,sh
     #print this data to a file
     f1= open('out.free_energy_cv_cp','w')
     f1.write('# specific heat \n#temp \t cv \t cp\n' )
-    for i in range(latt_der.shape[1]):
-        f1.write('%s \t%s \t%s\n' %(sheat[i][0],sheat[i][1],sheat[i][2])) 
+    for i in range(latt_data.shape[1]):
+        f1.write('%s \t%s \t%s\n' %(sheat[0][i],sheat[1][i],sheat[2][i])) 
     f1.close()
     #generate gnuplot file 
     gen_GNUPLOT('out.free_energy_cv_cp','specific_heat.gnuplot',3,'cv_cp')
@@ -1077,6 +1119,7 @@ def Murnaghan(vol,E0, B0, BP,V0):
     Return: Energy
     """
     E = E0 + B0/BP * vol * ((V0/vol)**BP/(BP-1.0)+1.0) - V0*B0/(BP-1.0)
+    
     return E
 
 def sixthorder_ploy(x, cof):
@@ -1095,7 +1138,13 @@ def sixthorder_ploy(x, cof):
     
     return func
 
-def twelththorder_ploy(x, cof):
+def twelththorder_ploy(x, cof0,cof1,cof2,cof3,cof4,cof5,cof6,cof7,
+                       cof8,cof9,cof10,cof11,cof12,cof13,cof14,cof15,
+                       cof16,cof17,cof18,cof19,cof20,cof21,cof22,cof23,
+                       cof24,cof25,cof26,cof27,cof28,cof29,cof30,cof31,
+                       cof32,cof33,cof34,cof35,cof36,cof37,cof38,cof39,
+                       cof40,cof41,cof42,cof43,cof44,cof45,cof46,cof47,
+                       cof48):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -1107,85 +1156,13 @@ def twelththorder_ploy(x, cof):
              
     """    
     # cof contains the fit coefficients of the 6th order polynomial of a and c
-    func = (cof[0]*x[0]**0*x[1]**0    + cof[1]*x[0]**1*x[1]**0  + cof[2]*x[0]**2*x[1]**0  + cof[3]*x[0]**3*x[1]**0    + cof[4]*x[0]**4*x[1]**0  + cof[5]*x[0]**5*x[1]**0  + cof[6]*x[0]**6*x[1]**0    +
-            cof[7]*x[0]**0*x[1]**1    + cof[8]*x[0]**1*x[1]**1  + cof[9]*x[0]**2*x[1]**1  + cof[10]*x[0]**3*x[1]**1   + cof[11]*x[0]**4*x[1]**1 + cof[12]*x[0]**5*x[1]**1 + cof[13]*x[0]**6*x[1]**1   + 
-            cof[14]*x[0]**0*x[1]**2   + cof[15]*x[0]**1*x[1]**2 + cof[16]*x[0]**2*x[1]**2 + cof[17]*x[0]**3*x[1]**2   + cof[18]*x[0]**4*x[1]**2 + cof[19]*x[0]**5*x[1]**2 + cof[20]*x[0]**6*x[1]**2   +
-            cof[21]*x[0]**0*x[1]**3   + cof[22]*x[0]**1*x[1]**3 + cof[23]*x[0]**2*x[1]**3 + cof[24]*x[0]**3*x[1]**3   + cof[25]*x[0]**4*x[1]**3 + cof[26]*x[0]**5*x[1]**3 + cof[27]*x[0]**6*x[1]**3   +
-            cof[28]*x[0]**0*x[1]**4   + cof[29]*x[0]**1*x[1]**4 + cof[30]*x[0]**2*x[1]**4 + cof[31]*x[0]**3*x[1]**4   + cof[32]*x[0]**4*x[1]**4 + cof[33]*x[0]**5*x[1]**4 + cof[34]*x[0]**6*x[1]**4   +
-            cof[35]*x[0]**0*x[1]**5   + cof[36]*x[0]**1*x[1]**5 + cof[37]*x[0]**2*x[1]**5 + cof[38]*x[0]**3*x[1]**5   + cof[39]*x[0]**4*x[1]**5 + cof[40]*x[0]**5*x[1]**5 + cof[41]*x[0]**6*x[1]**5   +
-            cof[42]*x[0]**0*x[1]**6   + cof[43]*x[0]**1*x[1]**6 + cof[44]*x[0]**2*x[1]**6 + cof[45]*x[0]**3*x[1]**6   + cof[46]*x[0]**4*x[1]**6 + cof[47]*x[0]**5*x[1]**6 + cof[48]*x[0]**6*x[1]**6   )
-    
-    return func
-
-def eighteenthorder_ploy(x, cof):
-    """
-    Author: Nicholas Pike
-    Email: Nicholas.pike@smn.uio.no
-    
-    Purpose: Determine the 18th order polynomial of the free energy for a fixed
-             temperature. Note that coord is an array passed from the optimizer
-    
-    Output:  Returns function which is used by the optimizer to find the global minimum
-    
-    Todo: add in the other grid dimension
-             
-    """    
-    # cof contains the fit coefficients of the 6th order polynomial of a and c
-    func = (cof[0]*x[0]**0*x[1]**0*x[2]**0     + cof[1]*x[0]**1*x[1]**0*x[2]**0   + cof[2]*x[0]**2*x[1]**0*x[2]**0   + cof[3]*x[0]**3*x[1]**0*x[2]**0   + cof[4]*x[0]**4*x[1]**0*x[2]**0   + cof[5]*x[0]**5*x[1]**0*x[2]**0   + cof[6]*x[0]**6*x[1]**0*x[2]**0     +
-            cof[7]*x[0]**0*x[1]**1*x[2]**0     + cof[8]*x[0]**1*x[1]**1*x[2]**0   + cof[9]*x[0]**2*x[1]**1*x[2]**0   + cof[10]*x[0]**3*x[1]**1*x[2]**0  + cof[11]*x[0]**4*x[1]**1*x[2]**0  + cof[12]*x[0]**5*x[1]**1*x[2]**0  + cof[13]*x[0]**6*x[1]**1*x[2]**0    + 
-            cof[14]*x[0]**0*x[1]**2*x[2]**0    + cof[15]*x[0]**1*x[1]**2*x[2]**0  + cof[16]*x[0]**2*x[1]**2*x[2]**0  + cof[17]*x[0]**3*x[1]**2*x[2]**0  + cof[18]*x[0]**4*x[1]**2*x[2]**0  + cof[19]*x[0]**5*x[1]**2*x[2]**0  + cof[20]*x[0]**6*x[1]**2*x[2]**0    +
-            cof[21]*x[0]**0*x[1]**3*x[2]**0    + cof[22]*x[0]**1*x[1]**3*x[2]**0  + cof[23]*x[0]**2*x[1]**3*x[2]**0  + cof[24]*x[0]**3*x[1]**3*x[2]**0  + cof[25]*x[0]**4*x[1]**3*x[2]**0  + cof[26]*x[0]**5*x[1]**3*x[2]**0  + cof[27]*x[0]**6*x[1]**3*x[2]**0    +
-            cof[28]*x[0]**0*x[1]**4*x[2]**0    + cof[29]*x[0]**1*x[1]**4*x[2]**0  + cof[30]*x[0]**2*x[1]**4*x[2]**0  + cof[31]*x[0]**3*x[1]**4*x[2]**0  + cof[32]*x[0]**4*x[1]**4*x[2]**0  + cof[33]*x[0]**5*x[1]**4*x[2]**0  + cof[34]*x[0]**6*x[1]**4*x[2]**0    +
-            cof[35]*x[0]**0*x[1]**5*x[2]**0    + cof[36]*x[0]**1*x[1]**5*x[2]**0  + cof[37]*x[0]**2*x[1]**5*x[2]**0  + cof[38]*x[0]**3*x[1]**5*x[2]**0  + cof[39]*x[0]**4*x[1]**5*x[2]**0  + cof[40]*x[0]**5*x[1]**5*x[2]**0  + cof[41]*x[0]**6*x[1]**5*x[2]**0    +
-            cof[42]*x[0]**0*x[1]**6*x[2]**0    + cof[43]*x[0]**1*x[1]**6*x[2]**0  + cof[44]*x[0]**2*x[1]**6*x[2]**0  + cof[45]*x[0]**3*x[1]**6*x[2]**0  + cof[46]*x[0]**4*x[1]**6*x[2]**0  + cof[47]*x[0]**5*x[1]**6*x[2]**0  + cof[48]*x[0]**6*x[1]**6*x[2]**0    +
-            #strat renumbering coeffs here at 49
-            cof[49]*x[0]**0*x[1]**0*x[2]**1     + cof[1]*x[0]**1*x[1]**0*x[2]**1   + cof[2]*x[0]**2*x[1]**0*x[2]**1   + cof[3]*x[0]**3*x[1]**0*x[2]**1   + cof[4]*x[0]**4*x[1]**0*x[2]**1   + cof[5]*x[0]**5*x[1]**0*x[2]**1   + cof[6]*x[0]**6*x[1]**0*x[2]**1    +
-            cof[7]*x[0]**0*x[1]**1*x[2]**1     + cof[8]*x[0]**1*x[1]**1*x[2]**1   + cof[9]*x[0]**2*x[1]**1*x[2]**1   + cof[10]*x[0]**3*x[1]**1*x[2]**1  + cof[11]*x[0]**4*x[1]**1*x[2]**1  + cof[12]*x[0]**5*x[1]**1*x[2]**1  + cof[13]*x[0]**6*x[1]**1*x[2]**1    + 
-            cof[14]*x[0]**0*x[1]**2*x[2]**1    + cof[15]*x[0]**1*x[1]**2*x[2]**1  + cof[16]*x[0]**2*x[1]**2*x[2]**1  + cof[17]*x[0]**3*x[1]**2*x[2]**1  + cof[18]*x[0]**4*x[1]**2*x[2]**1  + cof[19]*x[0]**5*x[1]**2*x[2]**1  + cof[20]*x[0]**6*x[1]**2*x[2]**1    +
-            cof[21]*x[0]**0*x[1]**3*x[2]**1    + cof[22]*x[0]**1*x[1]**3*x[2]**1  + cof[23]*x[0]**2*x[1]**3*x[2]**1  + cof[24]*x[0]**3*x[1]**3*x[2]**1  + cof[25]*x[0]**4*x[1]**3*x[2]**1  + cof[26]*x[0]**5*x[1]**3*x[2]**1  + cof[27]*x[0]**6*x[1]**3*x[2]**1    +
-            cof[28]*x[0]**0*x[1]**4*x[2]**1    + cof[29]*x[0]**1*x[1]**4*x[2]**1  + cof[30]*x[0]**2*x[1]**4*x[2]**1  + cof[31]*x[0]**3*x[1]**4*x[2]**1  + cof[32]*x[0]**4*x[1]**4*x[2]**1  + cof[33]*x[0]**5*x[1]**4*x[2]**1  + cof[34]*x[0]**6*x[1]**4*x[2]**1    +
-            cof[35]*x[0]**0*x[1]**5*x[2]**1    + cof[36]*x[0]**1*x[1]**5*x[2]**1  + cof[37]*x[0]**2*x[1]**5*x[2]**1  + cof[38]*x[0]**3*x[1]**5*x[2]**1  + cof[39]*x[0]**4*x[1]**5*x[2]**1  + cof[40]*x[0]**5*x[1]**5*x[2]**1  + cof[41]*x[0]**6*x[1]**5*x[2]**1    +
-            cof[42]*x[0]**0*x[1]**6*x[2]**1    + cof[43]*x[0]**1*x[1]**6*x[2]**1  + cof[44]*x[0]**2*x[1]**6*x[2]**1  + cof[45]*x[0]**3*x[1]**6*x[2]**1  + cof[46]*x[0]**4*x[1]**6*x[2]**1  + cof[47]*x[0]**5*x[1]**6*x[2]**1  + cof[48]*x[0]**6*x[1]**6*x[2]**1    +
-            
-            cof[0]*x[0]**0*x[1]**0*x[2]**2     + cof[1]*x[0]**1*x[1]**0*x[2]**2   + cof[2]*x[0]**2*x[1]**0*x[2]**2   + cof[3]*x[0]**3*x[1]**0*x[2]**2   + cof[4]*x[0]**4*x[1]**0*x[2]**2   + cof[5]*x[0]**5*x[1]**0*x[2]**2   + cof[6]*x[0]**6*x[1]**0*x[2]**2     +
-            cof[7]*x[0]**0*x[1]**1*x[2]**2     + cof[8]*x[0]**1*x[1]**1*x[2]**2   + cof[9]*x[0]**2*x[1]**1*x[2]**2   + cof[10]*x[0]**3*x[1]**1*x[2]**2  + cof[11]*x[0]**4*x[1]**1*x[2]**2  + cof[12]*x[0]**5*x[1]**1*x[2]**2  + cof[13]*x[0]**6*x[1]**1*x[2]**2    + 
-            cof[14]*x[0]**0*x[1]**2*x[2]**2    + cof[15]*x[0]**1*x[1]**2*x[2]**2  + cof[16]*x[0]**2*x[1]**2*x[2]**2  + cof[17]*x[0]**3*x[1]**2*x[2]**2  + cof[18]*x[0]**4*x[1]**2*x[2]**2  + cof[19]*x[0]**5*x[1]**2*x[2]**2  + cof[20]*x[0]**6*x[1]**2*x[2]**2    +
-            cof[21]*x[0]**0*x[1]**3*x[2]**2    + cof[22]*x[0]**1*x[1]**3*x[2]**2  + cof[23]*x[0]**2*x[1]**3*x[2]**2  + cof[24]*x[0]**3*x[1]**3*x[2]**2  + cof[25]*x[0]**4*x[1]**3*x[2]**2  + cof[26]*x[0]**5*x[1]**3*x[2]**2  + cof[27]*x[0]**6*x[1]**3*x[2]**2    +
-            cof[28]*x[0]**0*x[1]**4*x[2]**2    + cof[29]*x[0]**1*x[1]**4*x[2]**2  + cof[30]*x[0]**2*x[1]**4*x[2]**2  + cof[31]*x[0]**3*x[1]**4*x[2]**2  + cof[32]*x[0]**4*x[1]**4*x[2]**2  + cof[33]*x[0]**5*x[1]**4*x[2]**2  + cof[34]*x[0]**6*x[1]**4*x[2]**2    +
-            cof[35]*x[0]**0*x[1]**5*x[2]**2    + cof[36]*x[0]**1*x[1]**5*x[2]**2  + cof[37]*x[0]**2*x[1]**5*x[2]**2  + cof[38]*x[0]**3*x[1]**5*x[2]**2  + cof[39]*x[0]**4*x[1]**5*x[2]**2  + cof[40]*x[0]**5*x[1]**5*x[2]**2  + cof[41]*x[0]**6*x[1]**5*x[2]**2    +
-            cof[42]*x[0]**0*x[1]**6*x[2]**2    + cof[43]*x[0]**1*x[1]**6*x[2]**2  + cof[44]*x[0]**2*x[1]**6*x[2]**2  + cof[45]*x[0]**3*x[1]**6*x[2]**2  + cof[46]*x[0]**4*x[1]**6*x[2]**2  + cof[47]*x[0]**5*x[1]**6*x[2]**2  + cof[48]*x[0]**6*x[1]**6*x[2]**2    +
-            
-            cof[0]*x[0]**0*x[1]**0*x[2]**3     + cof[1]*x[0]**1*x[1]**0*x[2]**3   + cof[2]*x[0]**2*x[1]**0*x[2]**3   + cof[3]*x[0]**3*x[1]**0*x[2]**3   + cof[4]*x[0]**4*x[1]**0*x[2]**3   + cof[5]*x[0]**5*x[1]**0*x[2]**3   + cof[6]*x[0]**6*x[1]**0*x[2]**3     +
-            cof[7]*x[0]**0*x[1]**1*x[2]**3     + cof[8]*x[0]**1*x[1]**1*x[2]**3   + cof[9]*x[0]**2*x[1]**1*x[2]**3   + cof[10]*x[0]**3*x[1]**1*x[2]**3  + cof[11]*x[0]**4*x[1]**1*x[2]**3  + cof[12]*x[0]**5*x[1]**1*x[2]**3  + cof[13]*x[0]**6*x[1]**1*x[2]**3    + 
-            cof[14]*x[0]**0*x[1]**2*x[2]**3    + cof[15]*x[0]**1*x[1]**2*x[2]**3  + cof[16]*x[0]**2*x[1]**2*x[2]**3  + cof[17]*x[0]**3*x[1]**2*x[2]**3  + cof[18]*x[0]**4*x[1]**2*x[2]**3  + cof[19]*x[0]**5*x[1]**2*x[2]**3  + cof[20]*x[0]**6*x[1]**2*x[2]**3    +
-            cof[21]*x[0]**0*x[1]**3*x[2]**3    + cof[22]*x[0]**1*x[1]**3*x[2]**3  + cof[23]*x[0]**2*x[1]**3*x[2]**3  + cof[24]*x[0]**3*x[1]**3*x[2]**3  + cof[25]*x[0]**4*x[1]**3*x[2]**3  + cof[26]*x[0]**5*x[1]**3*x[2]**3  + cof[27]*x[0]**6*x[1]**3*x[2]**3    +
-            cof[28]*x[0]**0*x[1]**4*x[2]**3    + cof[29]*x[0]**1*x[1]**4*x[2]**3  + cof[30]*x[0]**2*x[1]**4*x[2]**3  + cof[31]*x[0]**3*x[1]**4*x[2]**3  + cof[32]*x[0]**4*x[1]**4*x[2]**3  + cof[33]*x[0]**5*x[1]**4*x[2]**3  + cof[34]*x[0]**6*x[1]**4*x[2]**3    +
-            cof[35]*x[0]**0*x[1]**5*x[2]**3    + cof[36]*x[0]**1*x[1]**5*x[2]**3  + cof[37]*x[0]**2*x[1]**5*x[2]**3  + cof[38]*x[0]**3*x[1]**5*x[2]**3  + cof[39]*x[0]**4*x[1]**5*x[2]**3  + cof[40]*x[0]**5*x[1]**5*x[2]**3  + cof[41]*x[0]**6*x[1]**5*x[2]**3    +
-            cof[42]*x[0]**0*x[1]**6*x[2]**3    + cof[43]*x[0]**1*x[1]**6*x[2]**3  + cof[44]*x[0]**2*x[1]**6*x[2]**3  + cof[45]*x[0]**3*x[1]**6*x[2]**3  + cof[46]*x[0]**4*x[1]**6*x[2]**3  + cof[47]*x[0]**5*x[1]**6*x[2]**3  + cof[48]*x[0]**6*x[1]**6*x[2]**3    +
-            
-            cof[0]*x[0]**0*x[1]**0*x[2]**4     + cof[1]*x[0]**1*x[1]**0*x[2]**4   + cof[2]*x[0]**2*x[1]**0*x[2]**4   + cof[3]*x[0]**3*x[1]**0*x[2]**4   + cof[4]*x[0]**4*x[1]**0*x[2]**4   + cof[5]*x[0]**5*x[1]**0*x[2]**4   + cof[6]*x[0]**6*x[1]**0*x[2]**4     +
-            cof[7]*x[0]**0*x[1]**1*x[2]**4     + cof[8]*x[0]**1*x[1]**1*x[2]**4   + cof[9]*x[0]**2*x[1]**1*x[2]**4   + cof[10]*x[0]**3*x[1]**1*x[2]**4  + cof[11]*x[0]**4*x[1]**1*x[2]**4  + cof[12]*x[0]**5*x[1]**1*x[2]**4  + cof[13]*x[0]**6*x[1]**1*x[2]**4    + 
-            cof[14]*x[0]**0*x[1]**2*x[2]**4    + cof[15]*x[0]**1*x[1]**2*x[2]**4  + cof[16]*x[0]**2*x[1]**2*x[2]**4  + cof[17]*x[0]**3*x[1]**2*x[2]**4  + cof[18]*x[0]**4*x[1]**2*x[2]**4  + cof[19]*x[0]**5*x[1]**2*x[2]**4  + cof[20]*x[0]**6*x[1]**2*x[2]**4    +
-            cof[21]*x[0]**0*x[1]**3*x[2]**4    + cof[22]*x[0]**1*x[1]**3*x[2]**4  + cof[23]*x[0]**2*x[1]**3*x[2]**4  + cof[24]*x[0]**3*x[1]**3*x[2]**4  + cof[25]*x[0]**4*x[1]**3*x[2]**4  + cof[26]*x[0]**5*x[1]**3*x[2]**4  + cof[27]*x[0]**6*x[1]**3*x[2]**4    +
-            cof[28]*x[0]**0*x[1]**4*x[2]**4    + cof[29]*x[0]**1*x[1]**4*x[2]**4  + cof[30]*x[0]**2*x[1]**4*x[2]**4  + cof[31]*x[0]**3*x[1]**4*x[2]**4  + cof[32]*x[0]**4*x[1]**4*x[2]**4  + cof[33]*x[0]**5*x[1]**4*x[2]**4  + cof[34]*x[0]**6*x[1]**4*x[2]**4    +
-            cof[35]*x[0]**0*x[1]**5*x[2]**4    + cof[36]*x[0]**1*x[1]**5*x[2]**4  + cof[37]*x[0]**2*x[1]**5*x[2]**4  + cof[38]*x[0]**3*x[1]**5*x[2]**4  + cof[39]*x[0]**4*x[1]**5*x[2]**4  + cof[40]*x[0]**5*x[1]**5*x[2]**4  + cof[41]*x[0]**6*x[1]**5*x[2]**4    +
-            cof[42]*x[0]**0*x[1]**6*x[2]**4    + cof[43]*x[0]**1*x[1]**6*x[2]**4  + cof[44]*x[0]**2*x[1]**6*x[2]**4  + cof[45]*x[0]**3*x[1]**6*x[2]**4  + cof[46]*x[0]**4*x[1]**6*x[2]**4  + cof[47]*x[0]**5*x[1]**6*x[2]**4  + cof[48]*x[0]**6*x[1]**6*x[2]**4    +
-            
-            cof[0]*x[0]**0*x[1]**0*x[2]**5     + cof[1]*x[0]**1*x[1]**0*x[2]**5   + cof[2]*x[0]**2*x[1]**0*x[2]**5   + cof[3]*x[0]**3*x[1]**0*x[2]**5   + cof[4]*x[0]**4*x[1]**0*x[2]**5   + cof[5]*x[0]**5*x[1]**0*x[2]**5   + cof[6]*x[0]**6*x[1]**0*x[2]**5     +
-            cof[7]*x[0]**0*x[1]**1*x[2]**5     + cof[8]*x[0]**1*x[1]**1*x[2]**5   + cof[9]*x[0]**2*x[1]**1*x[2]**5   + cof[10]*x[0]**3*x[1]**1*x[2]**5  + cof[11]*x[0]**4*x[1]**1*x[2]**5  + cof[12]*x[0]**5*x[1]**1*x[2]**5  + cof[13]*x[0]**6*x[1]**1*x[2]**5    + 
-            cof[14]*x[0]**0*x[1]**2*x[2]**5    + cof[15]*x[0]**1*x[1]**2*x[2]**5  + cof[16]*x[0]**2*x[1]**2*x[2]**5  + cof[17]*x[0]**3*x[1]**2*x[2]**5  + cof[18]*x[0]**4*x[1]**2*x[2]**5  + cof[19]*x[0]**5*x[1]**2*x[2]**5  + cof[20]*x[0]**6*x[1]**2*x[2]**5    +
-            cof[21]*x[0]**0*x[1]**3*x[2]**5    + cof[22]*x[0]**1*x[1]**3*x[2]**5  + cof[23]*x[0]**2*x[1]**3*x[2]**5  + cof[24]*x[0]**3*x[1]**3*x[2]**5  + cof[25]*x[0]**4*x[1]**3*x[2]**5  + cof[26]*x[0]**5*x[1]**3*x[2]**5  + cof[27]*x[0]**6*x[1]**3*x[2]**5    +
-            cof[28]*x[0]**0*x[1]**4*x[2]**5    + cof[29]*x[0]**1*x[1]**4*x[2]**5  + cof[30]*x[0]**2*x[1]**4*x[2]**5  + cof[31]*x[0]**3*x[1]**4*x[2]**5  + cof[32]*x[0]**4*x[1]**4*x[2]**5  + cof[33]*x[0]**5*x[1]**4*x[2]**5  + cof[34]*x[0]**6*x[1]**4*x[2]**5    +
-            cof[35]*x[0]**0*x[1]**5*x[2]**5    + cof[36]*x[0]**1*x[1]**5*x[2]**5  + cof[37]*x[0]**2*x[1]**5*x[2]**5  + cof[38]*x[0]**3*x[1]**5*x[2]**5  + cof[39]*x[0]**4*x[1]**5*x[2]**5  + cof[40]*x[0]**5*x[1]**5*x[2]**5  + cof[41]*x[0]**6*x[1]**5*x[2]**5    +
-            cof[42]*x[0]**0*x[1]**6*x[2]**5    + cof[43]*x[0]**1*x[1]**6*x[2]**5  + cof[44]*x[0]**2*x[1]**6*x[2]**5  + cof[45]*x[0]**3*x[1]**6*x[2]**5  + cof[46]*x[0]**4*x[1]**6*x[2]**5  + cof[47]*x[0]**5*x[1]**6*x[2]**5  + cof[48]*x[0]**6*x[1]**6*x[2]**5    +
-            
-            cof[0]*x[0]**0*x[1]**0*x[2]**6     + cof[1]*x[0]**1*x[1]**0*x[2]**6   + cof[2]*x[0]**2*x[1]**0*x[2]**6   + cof[3]*x[0]**3*x[1]**0*x[2]**6   + cof[4]*x[0]**4*x[1]**0*x[2]**6   + cof[5]*x[0]**5*x[1]**0*x[2]**6   + cof[6]*x[0]**6*x[1]**0*x[2]**6     +
-            cof[7]*x[0]**0*x[1]**1*x[2]**6     + cof[8]*x[0]**1*x[1]**1*x[2]**6   + cof[9]*x[0]**2*x[1]**1*x[2]**6   + cof[10]*x[0]**3*x[1]**1*x[2]**6  + cof[11]*x[0]**4*x[1]**1*x[2]**6  + cof[12]*x[0]**5*x[1]**1*x[2]**6  + cof[13]*x[0]**6*x[1]**1*x[2]**6    + 
-            cof[14]*x[0]**0*x[1]**2*x[2]**6    + cof[15]*x[0]**1*x[1]**2*x[2]**6  + cof[16]*x[0]**2*x[1]**2*x[2]**6  + cof[17]*x[0]**3*x[1]**2*x[2]**6  + cof[18]*x[0]**4*x[1]**2*x[2]**6  + cof[19]*x[0]**5*x[1]**2*x[2]**6  + cof[20]*x[0]**6*x[1]**2*x[2]**6    +
-            cof[21]*x[0]**0*x[1]**3*x[2]**6    + cof[22]*x[0]**1*x[1]**3*x[2]**6  + cof[23]*x[0]**2*x[1]**3*x[2]**6  + cof[24]*x[0]**3*x[1]**3*x[2]**6  + cof[25]*x[0]**4*x[1]**3*x[2]**6  + cof[26]*x[0]**5*x[1]**3*x[2]**6  + cof[27]*x[0]**6*x[1]**3*x[2]**6    +
-            cof[28]*x[0]**0*x[1]**4*x[2]**6    + cof[29]*x[0]**1*x[1]**4*x[2]**6  + cof[30]*x[0]**2*x[1]**4*x[2]**6  + cof[31]*x[0]**3*x[1]**4*x[2]**6  + cof[32]*x[0]**4*x[1]**4*x[2]**6  + cof[33]*x[0]**5*x[1]**4*x[2]**6  + cof[34]*x[0]**6*x[1]**4*x[2]**6    +
-            cof[35]*x[0]**0*x[1]**5*x[2]**6    + cof[36]*x[0]**1*x[1]**5*x[2]**6  + cof[37]*x[0]**2*x[1]**5*x[2]**6  + cof[38]*x[0]**3*x[1]**5*x[2]**6  + cof[39]*x[0]**4*x[1]**5*x[2]**6  + cof[40]*x[0]**5*x[1]**5*x[2]**6  + cof[41]*x[0]**6*x[1]**5*x[2]**6    +
-            cof[42]*x[0]**0*x[1]**6*x[2]**6    + cof[43]*x[0]**1*x[1]**6*x[2]**6  + cof[44]*x[0]**2*x[1]**6*x[2]**6  + cof[45]*x[0]**3*x[1]**6*x[2]**6  + cof[46]*x[0]**4*x[1]**6*x[2]**6  + cof[47]*x[0]**5*x[1]**6*x[2]**6  + cof[48]*x[0]**6*x[1]**6*x[2]**6)
+    func = (cof0*x[0]**0*x[1]**0 + cof1*x[0]**1*x[1]**0 + cof2*x[0]**2*x[1]**0 + cof3*x[0]**3*x[1]**0 + cof4*x[0]**4*x[1]**0 + cof5*x[0]**5*x[1]**0 + cof6*x[0]**6*x[1]**0 +
+            cof7*x[0]**0*x[1]**1 + cof8*x[0]**1*x[1]**1 + cof9*x[0]**2*x[1]**1 + cof10*x[0]**3*x[1]**1 + cof11*x[0]**4*x[1]**1 + cof12*x[0]**5*x[1]**1 + cof13*x[0]**6*x[1]**1 + 
+            cof14*x[0]**0*x[1]**2 + cof15*x[0]**1*x[1]**2 + cof16*x[0]**2*x[1]**2 + cof17*x[0]**3*x[1]**2 + cof18*x[0]**4*x[1]**2 + cof19*x[0]**5*x[1]**2 + cof20*x[0]**6*x[1]**2 +
+            cof21*x[0]**0*x[1]**3 + cof22*x[0]**1*x[1]**3 + cof23*x[0]**2*x[1]**3 + cof24*x[0]**3*x[1]**3 + cof25*x[0]**4*x[1]**3 + cof26*x[0]**5*x[1]**3 + cof27*x[0]**6*x[1]**3 +
+            cof28*x[0]**0*x[1]**4 + cof29*x[0]**1*x[1]**4 + cof30*x[0]**2*x[1]**4 + cof31*x[0]**3*x[1]**4 + cof32*x[0]**4*x[1]**4 + cof33*x[0]**5*x[1]**4 + cof34*x[0]**6*x[1]**4 +
+            cof35*x[0]**0*x[1]**5 + cof36*x[0]**1*x[1]**5 + cof37*x[0]**2*x[1]**5 + cof38*x[0]**3*x[1]**5 + cof39*x[0]**4*x[1]**5 + cof40*x[0]**5*x[1]**5 + cof41*x[0]**6*x[1]**5 +
+            cof42*x[0]**0*x[1]**6 + cof43*x[0]**1*x[1]**6 + cof44*x[0]**2*x[1]**6 + cof45*x[0]**3*x[1]**6 + cof46*x[0]**4*x[1]**6 + cof47*x[0]**5*x[1]**6 + cof48*x[0]**6*x[1]**6 )
     
     return func
 
@@ -1202,7 +1179,7 @@ def gen_GNUPLOT(plotfile,filename,numtoplot,plottype):
     if plottype == 'free_energy':
         f1= open(filename,'w')
         f1.write('# Automatically generated gnuplot file\n' )
-        f1.write('# File created by Nicholas Pike using anisotropic_expansion.py\n')
+        f1.write('# File created by Nicholas Pike using ACTE.py\n')
         f1.write('######################################################\n\n')
         f1.write('reset\n')
         f1.write('set terminal postscript eps enhanced color font "Helvetica,18" lw 1\n')
@@ -1229,7 +1206,7 @@ def gen_GNUPLOT(plotfile,filename,numtoplot,plottype):
     elif plottype == 'thermal_lattice':
         f1= open(filename,'w')
         f1.write('# Automatically generated gnuplot file\n' )
-        f1.write('# File created by Nicholas Pike using anisotropic_expansion.py\n')
+        f1.write('# File created by Nicholas Pike using ACTE.py\n')
         f1.write('######################################################\n\n')
         f1.write('reset\n')
         f1.write('set terminal postscript eps enhanced color font "Helvetica,18" lw 1\n')
@@ -1259,7 +1236,7 @@ def gen_GNUPLOT(plotfile,filename,numtoplot,plottype):
     elif plottype == 'expansion':
         f1= open(filename,'w')
         f1.write('# Automatically generated gnuplot file\n' )
-        f1.write('# File created by Nicholas Pike using anisotropic_expansion.py\n')
+        f1.write('# File created by Nicholas Pike using ACTE.py\n')
         f1.write('######################################################\n\n')
         f1.write('reset\n')
         f1.write('set terminal postscript eps enhanced color font "Helvetica,18" lw 1\n')
@@ -1288,7 +1265,7 @@ def gen_GNUPLOT(plotfile,filename,numtoplot,plottype):
     elif plottype == 'bulk_modulus':
         f1= open(filename,'w')
         f1.write('# Automatically generated gnuplot file\n' )
-        f1.write('# File created by Nicholas Pike using anisotropic_expansion.py\n')
+        f1.write('# File created by Nicholas Pike using ACTE.py\n')
         f1.write('######################################################\n\n')
         f1.write('reset\n')
         f1.write('set terminal postscript eps enhanced color font "Helvetica,18" lw 1\n')
@@ -1319,7 +1296,7 @@ def gen_GNUPLOT(plotfile,filename,numtoplot,plottype):
     elif plottype == 'cv_cp':
         f1= open(filename,'w')
         f1.write('# Automatically generated gnuplot file\n' )
-        f1.write('# File created by Nicholas Pike using anisotropic_expansion.py\n')
+        f1.write('# File created by Nicholas Pike using ACTE.py\n')
         f1.write('######################################################\n\n')
         f1.write('reset\n')
         f1.write('set terminal postscript eps enhanced color font "Helvetica,18" lw 1\n')
@@ -1645,6 +1622,19 @@ def move_file(filename,newlocation,original):
         
     return output
 
+def remove_file(filename):
+    """
+    Author: Nicholas Pike
+    Email: Nicholas.pike@smn.uio.no
+    
+    Purpose: Remove a file 
+    """
+    
+    bashrm = 'rm -r'+filename
+    output = bash_commands(bashrm)
+    
+    return output
+
 def copy_file(originalfile,newfile):
     """
     Author: Nicholas Pike
@@ -1658,7 +1648,7 @@ def copy_file(originalfile,newfile):
         
     return output
 
-def generate_batch(batchtype,batchname):
+def generate_batch(batchtype,batchname,tags):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -1672,7 +1662,18 @@ def generate_batch(batchtype,batchname):
              
     Return: None
     """
-    if batchtype == 'Relaxation':  
+    #unpack tags
+    if tags != '':
+        #withbounds = tags[0]
+        withsolver = tags[1]
+        withBEC    = tags[2]
+        #withDFTU0  = tags[3]
+    else:
+        withBEC    = False
+        withsolver = False
+    
+    #generate scripts
+    if batchtype == 'Relaxation' :  
         #print file
         f = open(batchname,'w')
         f.write('#!/bin/bash\n')
@@ -1682,56 +1683,56 @@ def generate_batch(batchtype,batchname):
         f.write(PYTHMOD+'\n')
         f.write('\n')
         f.write('## submit vasp job\n')
-        f.write('if [ -f "OUTCAR" ] && [ `python ../../anisotropic_expansion.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('if [ -f "OUTCAR" ] && [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
         f.write('echo "Already converged in previous run, moving on"\n') 
-        f.write('   python ../../anisotropic_expansion.py --outcar\n')
+        f.write('   python ../../ACTE.py --outcar\n')
         f.write('   echo "Launching calculations for elastic and dielectric tensors"\n')
-        f.write('   python ../../anisotropic_expansion.py --copy_file CONTCAR CONTCAR2\n')
-        f.write('   python ../../anisotropic_expansion.py --move_file CONTCAR2 Elastic True\n')
-        f.write('   python ../../anisotropic_expansion.py --generate_batch Elastic batch.sh\n')
-        f.write('   python ../../anisotropic_expansion.py --move_file batch.sh ../Elastic False\n')
-        f.write('   python ../../anisotropic_expansion.py --launch_calc Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --copy_file CONTCAR CONTCAR2\n')
+        f.write('   python ../../ACTE.py --move_file CONTCAR2 ../Elastic True\n')
+        f.write('   python ../../ACTE.py --generate_batch Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --move_file batch.sh ../Elastic False\n')
+        f.write('   python ../../ACTE.py --launch_calc ../Elastic batch.sh\n')
         f.write('else\n')
         f.write('echo "Starting first relaxation."\n')
         f.write('$MPIEXEC_LOCAL $VASPLOC $option\n')
         f.write('rm -f WAVECAR CHG\n')
-        f.write('if [ `python ../../anisotropic_expansion.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('if [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
         f.write(' echo "Converged in first attempt, moving on"\n')
-        f.write('   python ../../anisotropic_expansion.py --outcar\n')
+        f.write('   python ../../ACTE.py --outcar\n')
         f.write('   echo "Launching calculations for elastic and dielectric tensors"\n')
-        f.write('   python ../../anisotropic_expansion.py --copy_file CONTCAR CONTCAR2\n')        
-        f.write('   python ../../anisotropic_expansion.py --move_file CONTCAR2 ../Elastic True\n')
-        f.write('   python ../../anisotropic_expansion.py --generate_batch Elastic batch.sh\n')
-        f.write('   python ../../anisotropic_expansion.py --move_file batch.sh ../Elastic False\n')
-        f.write('   python ../../anisotropic_expansion.py --launch_calc Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --copy_file CONTCAR CONTCAR2\n')        
+        f.write('   python ../../ACTE.py --move_file CONTCAR2 ../Elastic True\n')
+        f.write('   python ../../ACTE.py --generate_batch Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --move_file batch.sh ../Elastic False\n')
+        f.write('   python ../../ACTE.py --launch_calc ../Elastic batch.sh\n')
         f.write(' else\n')
         f.write(' mv CONTCAR POSCAR\n')
         f.write('echo "Starting second relaxation."\n')
         f.write(' $MPIEXEC_LOCAL $VASPLOC $option\n')
         f.write('  rm -f WAVECAR CHG\n')
-        f.write('if [ `python ../../anisotropic_expansion.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('if [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
         f.write('  echo "Converged on second run, moving on"\n')
-        f.write('   python ../../anisotropic_expansion.py --outcar\n')
+        f.write('   python ../../ACTE.py --outcar\n')
         f.write('   echo "Launching calculations for elastic and dielectric tensors"\n')
-        f.write('   python ../../anisotropic_expansion.py --copy_file CONTCAR CONTCAR2\n')
-        f.write('   python ../../anisotropic_expansion.py --move_file CONTCAR2 ../Elastic True\n')
-        f.write('   python ../../anisotropic_expansion.py --generate_batch Elastic batch.sh\n')
-        f.write('   python ../../anisotropic_expansion.py --move_file batch.sh ../Elastic False\n')
-        f.write('   python ../../anisotropic_expansion.py --launch_calc Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --copy_file CONTCAR CONTCAR2\n')
+        f.write('   python ../../ACTE.py --move_file CONTCAR2 ../Elastic True\n')
+        f.write('   python ../../ACTE.py --generate_batch Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --move_file batch.sh ../Elastic False\n')
+        f.write('   python ../../ACTE.py --launch_calc ../Elastic batch.sh\n')
         f.write('  else\n')
         f.write(' mv CONTCAR POSCAR\n')
         f.write('echo "Starting third relaxation."\n')        
         f.write('  $MPIEXEC_LOCAL $VASPLOC $option\n')
         f.write('  rm -f WAVECAR CHG\n')
-        f.write('if [ `python ../../anisotropic_expansion.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('if [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
         f.write('   echo "Converged on third run, moving on"\n')
-        f.write('   python ../../anisotropic_expansion.py --outcar\n')
+        f.write('   python ../../ACTE.py --outcar\n')
         f.write('   echo "Launching calculations for elastic and dielectric tensors"\n')
-        f.write('   python ../../anisotropic_expansion.py --copy_file CONTCAR CONTCAR2\n')
-        f.write('   python ../../anisotropic_expansion.py --move_file CONTCAR2 ../Elastic True\n')
-        f.write('   python ../../anisotropic_expansion.py --generate_batch Elastic batch.sh\n')
-        f.write('   python ../../anisotropic_expansion.py --move_file batch.sh ../Elastic False\n')
-        f.write('   python ../../anisotropic_expansion.py --launch_calc Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --copy_file CONTCAR CONTCAR2\n')
+        f.write('   python ../../ACTE.py --move_file CONTCAR2 ../Elastic True\n')
+        f.write('   python ../../ACTE.py --generate_batch Elastic batch.sh\n')
+        f.write('   python ../../ACTE.py --move_file batch.sh ../Elastic False\n')
+        f.write('   python ../../ACTE.py --launch_calc ../Elastic batch.sh\n')
         f.write('   else\n') 
         f.write('   echo "Run failed to converge after 3 attempts. Aborting"\n')
         f.write('   exit 1 \n')
@@ -1753,7 +1754,7 @@ def generate_batch(batchtype,batchname):
         f.write('## submit vasp job\n')
         f.write(' mv CONTCAR2 POSCAR\n')
         f.write('$MPIEXEC_LOCAL $VASPLOC $option\n')     
-        f.write('   python ../../anisotropic_expansion.py --outcar\n')         
+        f.write('   python ../../ACTE.py --outcar\n')         
         f.close()
         
     elif batchtype == 'TDEP':
@@ -1792,7 +1793,7 @@ def generate_batch(batchtype,batchname):
         f.write('cp -up KPOINTS $rlx_dir/\n')
         f.write('\n')
         f.write('cd $rlx_dir\n')
-        f.write('if [ -s "OUTCAR" ] && [ `python ../../anisotropic_expansion.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('if [ -s "OUTCAR" ] && [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
         f.write('    echo "Already converged, moving on"\n')
         f.write('else\n')
         f.write('\n')
@@ -1862,12 +1863,12 @@ def generate_batch(batchtype,batchname):
         f.write('    done\n')
         f.write('    ln -s outfile.ssposcar infile.ssposcar\n')
         f.write('\n')
-        f.write('# Run VASP:\n')
-        f.write('    echo "Run VASP configs "\n')
+        f.write('# Build VASP files\n')
+        f.write('    echo "Build VASP configs "\n')
         f.write('    for d in conf*; do\n')
         f.write('    cd $d\n')
         f.write('    if [ -f "OUTCAR" ] ; then\n')
-        f.write('       pythonresult=$(python ../../../../anisotropic_expansion.py --vasp_converge TDEP)\n')
+        f.write('       pythonresult=$(python ../../../../ACTE.py --vasp_converge TDEP)\n')
         f.write('    fi\n')
         f.write('    cd ..\n')
         f.write('    if [ -f "$d/OUTCAR" ] && [ "$pythonresult" == "True" ] ; then\n')
@@ -1875,19 +1876,171 @@ def generate_batch(batchtype,batchname):
         f.write('        else\n')
         f.write('            cp -up INCAR POTCAR $d\n')
         f.write('            cd $d\n')
-        f.write('            echo "Starting calculation of $d"\n')
         f.write('            #make KPOINT File\n')
-        f.write('            python ../../../../anisotropic_expansion.py --make_KPOINTS '+str(int(2.0*kdensity))+'\n')
-        f.write('            $MPIEXEC_LOCAL $VASPLOC $option\n') 
-        f.write('            rm -f CHG WAVECAR DOSCAR CHGCAR vasprun.xml\n')
+        f.write('            python ../../../../ACTE.py --make_KPOINTS '+str(int(2.0*kdensity))+'\n')
+        f.write('            python ../../../../ACTE.py --generate_batch Ground_state batch.sh \n')
+        f.write('            #$MPIEXEC_LOCAL $VASPLOC $option\n') 
+        f.write('            #rm -f CHG WAVECAR DOSCAR CHGCAR vasprun.xml\n')
         f.write('            cd ..\n')
+        f.write('            python ../../../ACTE.py --launch_calc $d batch.sh \n')
         f.write('        fi\n')
         f.write('    done\n')
         f.write('\n')
         f.write('fi\n')
         f.write('\n')
-        f.write('echo "Calculation of configurations complete. "\n')
+        f.write('echo "Generatations of configurations complete. "\n')
         f.write('\n')
+        f.close()
+    
+    elif batchtype == 'TDEP2':        
+        #print file
+        f = open(batchname,'w')
+        f.write('#!/bin/bash\n')
+        f.write(batch_header_tdep)
+        f.write('\n')
+        f.write(VASPSR)
+        f.write('\n')
+        f.write(PYTHMOD+'\n')
+        f.write('#set up directories and files\n')
+        f.write('rlx_dir=relaxation2\n')
+        f.write('initial_MD_dir=moldyn\n')
+        f.write('config_dir=configs\n')
+        f.write('# Default parameters:\n')
+        f.write('natom='+natom_ss+'\n')
+        f.write('n_configs='+n_configs+'\n')
+        f.write('t_configs='+t_configs+'\n')
+        f.write('debye=%s\n'%debye)
+        f.write('\n')
+        f.write('echo "start relaxation of cell after cell parameter change"\n')
+        f.write('mv POSCAR_* POSCAR\n')
+        f.write('mkdir -p $rlx_dir\n')
+        f.write('cp -up POSCAR $rlx_dir/\n')
+        f.write('cp -up POTCAR $rlx_dir/  #use previously generated POTCAR\n')
+        f.write('cp -up INCAR_rlx $rlx_dir/INCAR\n')
+        f.write('cp -up KPOINTS $rlx_dir/\n')
+        f.write('\n')
+        f.write('cd $rlx_dir\n')
+        f.write('if [ -s "OUTCAR" ] && [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('    echo "Already converged, moving on"\n')
+        f.write('else\n')
+        f.write('\n')
+        f.write('   #create last file and run vasp  \n')
+        f.write('   $MPIEXEC_LOCAL $VASPLOC $option\n')
+        f.write('   rm -f WAVECAR CHG\n')
+        f.write('fi\n')
+        f.write('\n')
+        f.write('cd ..\n')
+        f.write('echo "Starting configuration creation "\n')
+        f.write('\n')
+        f.write('mkdir -p $initial_MD_dir\n')
+        f.write('cp -up INCAR $initial_MD_dir/INCAR\n')
+        f.write('cp -up $rlx_dir/CONTCAR $initial_MD_dir/infile.ucposcar\n')
+        f.write('cp -up POTCAR $initial_MD_dir/\n')
+        f.write('cp -up ../infile.lotosplitting $initial_MD_dir/\n')
+        f.write('\n')
+        f.write('cd  $initial_MD_dir/\n')
+        f.write('# Create start structure for high accuracy calcs at finite temperature \n')
+        f.write('if [ -f "infile.forceconstant" ]; then\n')
+        f.write('    echo "Already found force constants, moving on"\n')
+        f.write('else\n')
+        f.write('    echo "Run generate_structure" \n')
+        f.write('   srun -n 1  '+TDEPSR+'generate_structure -na $natom\n')
+        f.write('\n')
+        f.write('     ln -s outfile.ssposcar infile.ssposcar\n')
+        f.write('     cp outfile.ssposcar POSCAR\n')
+        f.write('fi\n')
+        f.write('\n')
+        f.write('if [ ! -f "contcar_conf0001" ]; then\n')
+        f.write('    echo "Run canonical_configuration"\n')
+        f.write('      srun -n 1 '+TDEPSR+'canonical_configuration -n $n_configs -t $t_configs --quantum\n')
+        f.write('  fi\n')
+        f.write(' cp outfile.fakeforceconstant infile.forceconstant\n')
+        f.write('\n')
+        f.write('if [ ! -f "contcar_conf0001" ]; then\n')
+        f.write('    echo "canonical_configuration failed; cannot find contcar_conf0001. Exiting."\n')
+        f.write('    exit 1\n')
+        f.write('fi\n')
+        f.write('echo "Run file operations for configs first iteration"\n')
+        f.write('mkdir -p ../$config_dir\n')
+        f.write('mv -u contcar_* ../$config_dir\n')
+        f.write('cp -up infile.ucposcar outfile.ssposcar infile.lotosplitting POTCAR ../$config_dir\n')
+        f.write('cp -up INCAR ../$config_dir/INCAR\n')
+        f.write('cd ../$config_dir\n')
+        f.write('\n')
+        f.write('echo "Current dir: " $PWD\n')
+        f.write('if [ -f "outfile.free_energy" ] ; then\n')
+        f.write('    rm -f contcar_*\n')
+        f.write('    echo "Calculation already converged, continuing"\n')
+        f.write('else\n')
+        f.write('    g="contcar_"\n')
+        f.write('    for f in contcar_conf*; do\n')
+        f.write('        if [ -e "$f" ]; then\n')
+        f.write('            echo $f\n')
+        f.write('        else\n')
+        f.write('            echo "configurations do not exist, exiting"; exit 1\n')
+        f.write('        fi\n')
+        f.write('        dir=${f#$g}\n')
+        f.write('        mkdir -p $dir\n')
+        f.write('        if [ -e "$dir/POSCAR" ]; then\n')
+        f.write('            rm -f $f\n')
+        f.write('            echo "$dir/POSCAR already exists, skipping"\n')
+        f.write('        else\n')
+        f.write('            mv -n $f $dir/POSCAR\n')
+        f.write('        fi\n')
+        f.write('    done\n')
+        f.write('    ln -s outfile.ssposcar infile.ssposcar\n')
+        f.write('\n')
+        f.write('# Build VASP files\n')
+        f.write('    echo "Build VASP configs "\n')
+        f.write('    for d in conf*; do\n')
+        f.write('    cd $d\n')
+        f.write('    if [ -f "OUTCAR" ] ; then\n')
+        f.write('       pythonresult=$(python ../../../../ACTE.py --vasp_converge TDEP)\n')
+        f.write('    fi\n')
+        f.write('    cd ..\n')
+        f.write('    if [ -f "$d/OUTCAR" ] && [ "$pythonresult" == "True" ] ; then\n')
+        f.write('            echo "Already converged in $d, moving on"\n')
+        f.write('        else\n')
+        f.write('            cp -up INCAR POTCAR $d\n')
+        f.write('            cd $d\n')
+        f.write('            #make KPOINT File\n')
+        f.write('            python ../../../../ACTE.py --make_KPOINTS '+str(int(2.0*kdensity))+'\n')
+        f.write('            python ../../../../ACTE.py --generate_batch Ground_state batch.sh \n')
+        f.write('            #$MPIEXEC_LOCAL $VASPLOC $option\n') 
+        f.write('            #rm -f CHG WAVECAR DOSCAR CHGCAR vasprun.xml\n')
+        f.write('            cd ..\n')
+        f.write('            python ../../../ACTE.py --launch_calc $d batch.sh \n')
+        f.write('        fi\n')
+        f.write('    done\n')
+        f.write('\n')
+        f.write('fi\n')
+        f.write('\n')
+        f.write('echo "Generatations of configurations complete. "\n')
+        f.write('\n')
+        f.close()
+        
+    elif batchtype == 'Ground_state':
+        #print file
+        f = open(batchname,'w')
+        f.write('#!/bin/bash\n')
+        f.write(batch_header_gs)
+        f.write('\n')
+        f.write(VASPSR)
+        f.write('\n')
+        f.write(PYTHMOD+'\n')
+        f.write('# Define and create a unique scratch directory for this job\n')
+        f.write('SCRATCH_DIRECTORY=/global/work/${USER}/${SLURM_JOBID}.stallo-adm.uit.no\n')
+        f.write('mkdir -p ${SCRATCH_DIRECTORY}\n')
+        f.write('cd ${SCRATCH_DIRECTORY}\n')
+        f.write('# You can copy everything you need to the scratch directory\n')
+        f.write('cp ${SLURM_SUBMIT_DIR}/* ${SCRATCH_DIRECTORY}\n')
+        f.write('## submit vasp job\n')
+        f.write('$MPIEXEC_LOCAL $VASPLOC $option\n')     
+        f.write('rm -f CHG WAVECAR DOSCAR CHGCAR vasprun.xml\n')
+        f.write('# copy back all data after calculation runs\n')
+        f.write('cp ${SCRATCH_DIRECTORY}/* ${SLURM_SUBMIT_DIR}\n')
+        f.write('cd ${SLURM_SUBMIT_DIR}\n')
+        f.write('rm -rf ${SCRATCH_DIRECTORY}\n')
         f.close()
         
     elif batchtype == 'script':
@@ -1895,7 +2048,14 @@ def generate_batch(batchtype,batchname):
         f = open(batchname,'w')
         f.write('#loop through configuration files and run TDEP \n')
         f.write('python2 '+TDEPSR+'process_outcar_5.3.py */OUTCAR\n')
-        f.write(TDEPSR+'extract_forceconstants -rc2 '+rc_cut+' --polar -U0 --solver 2\n')
+        if withsolver == True and withBEC == True:
+            f.write(TDEPSR+'extract_forceconstants -rc2 '+rc_cut+' --polar -U0 --solver 2\n')
+        elif withsolver == False and withBEC == True:
+            f.write(TDEPSR+'extract_forceconstants -rc2 '+rc_cut+' --polar -U0 --solver 1\n')
+        elif withsolver == True and withBEC == False:
+            f.write(TDEPSR+'extract_forceconstants -rc2 '+rc_cut+' -U0 --solver 2\n')
+        elif withsolver == False and withBEC == False:
+            f.write(TDEPSR+'extract_forceconstants -rc2 '+rc_cut+' -U0 --solver 1\n')
         f.write('ln -s outfile.forceconstant infile.forceconstant\n')
         f.write(TDEPSR+'phonon_dispersion_relations --dos --temperature_range '+tmin+' '+tmax+' '+tsteps+' -qg '+qgrid+' -it '+iter_type+' --unit icm\n')    
         f.close()
@@ -2159,6 +2319,52 @@ def launch_script(location,nameofbatch):
     
     return None
 
+def relaunch_configs(unstable_files,filenames):
+    """
+    Author: Nicholas Pike
+    Email: Nicholas.pike@smn.uio.no
+    
+    Purpose: Relaunch calculations with unstable phonon modes
+    
+    Return: None
+    """
+    
+    for i in range(len(unstable_files)):
+        #Find what folder to look into.
+        filenumber = unstable_files[i]
+        
+        #remove lines from data_extraction
+        g = open('results.txt','r')
+        lines = g.readlines()
+        g.close()
+        
+        #now rewrite file 
+        g = open('results.txt','w')
+        for line in lines:
+            if not line.startswith('free_energies'):
+                g.write(line)
+        g.close()
+                    
+        #remove file from free_energies folder
+        remove_file('free_energies/'+filenames[i])
+        
+        #move old free_energy file
+        move_file('lattice_'+filenumber+'/configs/outfile.free_energy','lattice_'+filenumber+'/configs/outfile.free_energy_old',False)
+        
+        #remove folders for configurations 
+        remove_file('lattice_'+filenumber+'/configs/conf00*')
+        
+        #generate files
+        generate_batch('TDEP2','batch.sh','')
+                    
+        #move files
+        move_file('batch.sh','lattice_'+str(i),original=True)
+        
+        #launch calculation
+        launch_calc('lattice_'+str(i),'batch.sh')
+        
+    return None
+
 def vasp_converge(calctype):
     """
     Author: Nicholas Pike
@@ -2180,19 +2386,23 @@ def vasp_converge(calctype):
                     if Relaxation_phrase in line:
                         check = "True"
                         break
+                    
     elif calctype == 'Elastic':
         with open('OUTCAR','r') as out:
               for line in out:
                     if Elastic_phrase in line:
                         check = "True"
                         break
+                    
     elif calctype == 'TDEP':
         with open('OUTCAR','r') as out:
           for line in out:
                 if TDEP_phrase in line:
                     check = "True"
                     break    
+                
     print(check)
+    
     return None
 
 def check_computer():
@@ -2206,8 +2416,6 @@ def check_computer():
              
     Return: None
     """
-    
-    
     print('Checking directories for necessary files...')
     print(' ')
     print('Checking python version...')
@@ -2263,6 +2471,9 @@ def check_computer():
         print('   Current working directory is found.')
     else:
         print('   Current working directory is not found.')
+        print('   ERROR: Current working directory set as:')
+        print('          %s' %cwd)
+        print('          This is not the current directory.')
         sys.exit()
                 
     #checking for pseudopotential files.
@@ -2272,12 +2483,60 @@ def check_computer():
         print('   pseudos directory exists.')
     else:
         print('   pseudos directory not found.')
+        print('   Creating directory now...')
+        make_folder('pseudos')
         sys.exit()
+        
     if os.path.exists(cwd+'/pseudos/Mg/POTCAR'): #check for Mg potcar file
         print('   pseudos directory has POTCAR files')
     else:
         print('   pseudos director is missing POTCAR files.')
         sys.exit()
+        
+    #check for TDEP programs
+    print(' ')
+    print('Checking for TDEP executables')
+    #check for process_outcar
+    if os.path.isdir(TDEPSR):
+        print('   Directory for TDEP executables found.')
+    else:
+        print('   Directory to TDEP executables not found.')
+        sys.exit()
+        
+    print('   looking for processing_outcar python file')
+    if os.path.isfile(TDEPSR+'/process_outcar_5.3.py'):
+        print('   process_outcar_5.3.py is found.')
+    else:
+        print('   process_outcar_5.3.py not found.')
+        sys.exit()
+        
+    print('   looking for extract_forceconstants')
+    if os.path.isfile(TDEPSR+'/extract_forceconstants'):
+        print('   extract_forceconstants is found.')
+    else:
+        print('   extract_forceconstants not found.')
+        sys.exit()
+        
+    print('   looking for phonon_dispersion_relations')
+    if os.path.isfile(TDEPSR+'/phonon_dispersion_relations'):
+        print('   phonon_dispersion_relations is found.')
+    else:
+        print('   phonon_dispersion_relations not found.')
+        sys.exit()
+
+    print('   looking for generate_structure')
+    if os.path.isfile(TDEPSR+'/generate_structure'):
+        print('   generate_structure is found.')
+    else:
+        print('   generate_structure not found.')
+        sys.exit()       
+        
+    print('   looking for canonical_configuration')
+    if os.path.isfile(TDEPSR+'/canonical_configuration'):
+        print('   canonical_configuration is found.')
+    else:
+        print('   canonical_configuration not found.')
+        sys.exit()          
                 
     print(' ')
     print('All files and directories are found.  Happy computing!')    
@@ -2291,6 +2550,8 @@ def get_lattice(file):
     Email: Nicholas.pike@smn.uio.no
     
     Purpose: Read the lattice parameters from a poscar file and return the a, b, c, and volume
+    
+    Return: the three lattice parameters and volume of the cell
     """
     POSCAR_store = []
     #store poscar file for later use
@@ -2319,14 +2580,24 @@ def get_energy(file):
     Email: Nicholas.pike@smn.uio.no
     
     Purpose: Read the total energy from the CONTCAR file and return the energy
-    """
-    #store poscar file for later use
-    with open(file,'r') as OUTCAR:
-       for line in OUTCAR:
-           if '  free  energy   TOTEN  =' in line:
-               l = line.split()
-               engtot = float(l[4])
     
+    Return: Total energy
+    """
+    #read energy from...
+    
+    if file.endswith('OUTCAR'):
+        with open(file,'r') as OUTCAR:
+           for line in OUTCAR:
+               if '  free  energy   TOTEN  =' in line:
+                   l = line.split()
+                   engtot = float(l[4])
+                   
+    elif file.endswith('outfile.U0'):
+        with open(file,'r') as U0:
+            firstline = U0.readlines()
+            engy      = firstline[0].split()
+        engtot = float(engy[0])
+        
     return engtot
 
 def read_POSCAR():
@@ -2337,9 +2608,11 @@ def read_POSCAR():
     Purpose: Read the relaxed poscar file (Relaxation/CONTCAR) and extract the 
             lattice parameters.  From these parameters, determine how many poscar
             files need to be generated to determine the thermal expansion of the lattice
+            
+    Return: number of different cells and an array of poscar names
     """
     diff_volumes = 0
-    speccell = 0
+    speccell     = 0
     poscarnames  = []
     #read in relaxed POSCAR file from relaxation calculation
     POSCAR_store = []
@@ -2363,10 +2636,10 @@ def read_POSCAR():
     if diff_volumes == 6:
        if speccell == 0:
            for i in range(diff_volumes):
-               percent = 0.01
-               avec[0] = a*(1.0+percent*(i-2.0))
-               bvec[1] = b*(1.0+percent*(i-2.0))
-               cvec[2] = c*(1.0+percent*(i-2.0))
+               percent = 0.015
+               avec[0] = a*(1.0+percent*(i-1.0))
+               bvec[1] = b*(1.0+percent*(i-1.0))
+               cvec[2] = c*(1.0+percent*(i-1.0))
                
                #change lines in POSCAR
                POSCAR_store[2] = str(avec[0])+' '+str(avec[1])+' '+str(avec[2])+'\n'
@@ -2378,11 +2651,12 @@ def read_POSCAR():
                        f.write(POSCAR_store[j])
                poscarnames = np.append(poscarnames,'POSCAR_'+str(i))
                
-    elif diff_volumes == 25:
+    elif diff_volumes == 49:
        cc = 0
+       percent      = 0.008
+
        if speccell == 0:
            numb = int(np.sqrt(diff_volumes))
-           percent = 0.01
            for i in range(numb):
                for j in range(numb):
                    avec[0] = a*(1.0+percent*(i-1.0))        
@@ -2402,7 +2676,6 @@ def read_POSCAR():
                    
        elif  speccell == 1:
            numb = int(np.sqrt(diff_volumes))
-           percent = 0.01
            for i in range(numb):
                for j in range(numb):
                    avec[0] = a*(1.0+percent*(i-1.0))        
@@ -2422,7 +2695,6 @@ def read_POSCAR():
                    
        elif  speccell == 2:
            numb = int(np.sqrt(diff_volumes))
-           percent = 0.01
            for i in range(numb):
                for j in range(numb):
                    avec[0] = a*(1.0+percent*(i-1.0))        
@@ -2442,7 +2714,6 @@ def read_POSCAR():
 
        elif  speccell == 3:
            numb = int(np.sqrt(diff_volumes))
-           percent = 0.01
            for i in range(numb):
                for j in range(numb):
                    avec[0] = a*(1.0+percent*(i-1.0))        
@@ -2461,11 +2732,12 @@ def read_POSCAR():
                    poscarnames = np.append(poscarnames,'POSCAR_'+str(cc))
                    cc +=1                   
                            
-    elif diff_volumes == 75:
+    elif diff_volumes == 343:
        cc = 0
+       percent      = 0.01
+
        if speccell == 0:
-           numb = int(diff_volumes**(3.0/2.0))
-           percent = 0.01
+           numb = int(diff_volumes**(1.0/3.0))
            for i in range(numb):
                for j in range(numb):
                    for k in range(numb):
@@ -2492,6 +2764,8 @@ def determine_volumes():
     Email: Nicholas.pike@smn.uio.no
     
     Purpose: Determines the number of volumes by reading the poscar file.
+    
+    Return: number of volumes and the cell identification number
     """
     POSCAR_store = []
     with open('Relaxation/CONTCAR','r') as POSCAR:
@@ -2519,26 +2793,26 @@ def determine_volumes():
         and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
         and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #a and b are the same, c is different, 25 volumes , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 25
+       diff_volumes = 49
        speccell = 0
     elif ( np.abs(a-b)> difftol and np.abs(float(avec[1])) == np.abs(float(avec[2])) 
         and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
         and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #a and c are the same, b is different, 25 volumes , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 25
+       diff_volumes = 49
        speccell = 1
     elif ( np.abs(a-b)> difftol and np.abs(b -c)<= difftol 
         and np.abs(float(avec[1])) == np.abs(float(avec[2])) 
         and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
         and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #b and c are the same, a is different, 25 volumes , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 25
+       diff_volumes = 49
        speccell = 2        
     elif ( np.abs(a-b)<= difftol and np.abs(a-c)> difftol 
           and np.abs(np.abs(float(bvec[0])) -0.5*float(avec[0]))<=difftol
           and np.abs(float(bvec[1]) - np.sqrt(3.0)/2.0*float(avec[0]))<= difftol ):
         #a = b, and c different and bx = 0.5 ax and ax *sqrt(3)/2 = by
-        diff_volumes = 25
+        diff_volumes = 49
         speccell = 3
        
     elif ( np.abs(a-b)> difftol and np.abs(a-c)> difftol
@@ -2546,7 +2820,7 @@ def determine_volumes():
           and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
           and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #all vectors are different, 75 volumes and , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 75
+       diff_volumes = 343
        speccell = 0
     else:
        print('Something bad happened, or differnet symmetry read in, when reading the POSCAR file')
@@ -2625,6 +2899,7 @@ def generate_LOTO():
         f.write('%f %f %f\n' %(bectensor[i][1][0],bectensor[i][1][1],bectensor[i][1][2]))
         f.write('%f %f %f\n' %(bectensor[i][2][0],bectensor[i][2][1],bectensor[i][2][2]))
     f.close()
+    
     return None
 
 def find_debye():
@@ -2633,14 +2908,16 @@ def find_debye():
     Email: Nicholas.pike@smn.uio.no
     
     Purpose:Determine the debye temperature from the calculated elastic tensor
+    
+    Return: Debye Temperature
     """
     debye_temp = 0
-    density = 0
-    masstot = 0
-    molarmass = 0
-    data = ['',0,0,0,0]
-    molar = []
-    eltensor = np.zeros(shape=(6,6))
+    density    = 0
+    masstot    = 0
+    molarmass  = 0
+    data       = ['',0,0,0,0]
+    molar      = []
+    eltensor   = np.zeros(shape=(6,6))
     
     #read information from data_extraction file
     with open('data_extraction','r') as datafile:
@@ -2759,7 +3036,7 @@ def sortflags():
     
     if len(sys.argv) == 1:
         #check if the user did not enter anything
-        print('Use python anisotropic_expansion.py --help to view the help menu and \nto learn how to run the program.')
+        print('Use python ACTE.py --help to view the help menu and \nto learn how to run the program.')
         sys.exit()
     else:
         i = 1
@@ -2790,16 +3067,19 @@ def sortflags():
                 print('--launch_calc \t Launches parallel calculation.')
                 print('--outcar\t Gather information from outcar file.')
                 print('--vasp_converge  Checks the convergence of the calculation.')
+                i+=1
                 sys.exit()
             
             elif sys.argv[i] == '--usage':
                 tagfound = True
-                print('--usage\t To use this program use the following in the command line.\n python anisotropic_expansion.py --TAG data_extraction_file')
+                print('--usage\t To use this program use the following in the command line.\n python ACTE.py --TAG data_extraction_file')
+                i+=1
                 sys.exit()
         
             elif sys.argv[i] == '--author':
                 tagfound = True
                 print('--author\t The author of this program is %s' %__author__)
+                i+=1
                 sys.exit()
         
             elif sys.argv[i] == '--version':
@@ -2807,21 +3087,25 @@ def sortflags():
                 print('--version\t This version of the program is %s \n\n  This version allows the user'
                       ' to read in information gathered with a\n different python script and calculate\n '
                       ' the pyroelectric coefficients from a first principles calculation.' %__version__)
+                i+=1
                 sys.exit()
     
             elif sys.argv[i] == '--email':
                 tagfound = True
                 print('--email\t Please send questions and comments to %s' %__email__)
+                i+=1
                 sys.exit()
         
             elif sys.argv[i] == '--bug':
                 tagfound = True
                 print('--bug \t Please sned bug reports to %s' %__email__)
+                i+=1
                 sys.exit()
                 
             elif sys.argv[i] == '--check_sys':
                 tagfound = True
                 check_computer()
+                i+=1
                 sys.exit()
                 
             elif sys.argv[i] == '--relaxation':
@@ -2831,7 +3115,7 @@ def sortflags():
                 make_folder('Elastic')
                 
                 #Create input files for VASP calculations and store in the correct folders
-                generate_batch('Relaxation','batch.sh')
+                generate_batch('Relaxation','batch.sh','')
                 move_file('batch.sh','Relaxation',original = False)
                 
                 generate_INCAR('Relaxation')
@@ -2852,6 +3136,7 @@ def sortflags():
                 
                 #submit relaxation calculation
                 launch_calc('Relaxation','batch.sh')
+                i+=1
                 sys.exit()
             
             elif sys.argv[i] == '--build_cells':
@@ -2869,7 +3154,7 @@ def sortflags():
                 generate_INCAR('TDEP_rlx')
                 copy_file('INCAR','INCAR_rlx')
                 generate_INCAR('TDEP')
-                generate_batch('TDEP','batch.sh')
+                generate_batch('TDEP','batch.sh','')
                 generate_KPOINT(kdensity)
         
                 for j in range(diff_volumes):
@@ -2881,29 +3166,45 @@ def sortflags():
                     move_file('KPOINTS','lattice_'+str(j),original=True)
                     move_file('POSCAR_'+str(j),'lattice_'+str(j),original=False)
                     launch_calc('lattice_'+str(j),'batch.sh')
+                i+=1
                 sys.exit()
                 
             elif sys.argv[i] == '--relaunch_tdep':
                 tagfound = True
                 diff_volumes, speccell = determine_volumes() 
-                for i in range(diff_volumes):
-                    launch_calc('lattice_'+str(i),'batch.sh')
+                for ii in range(diff_volumes):
+                    launch_calc('lattice_'+str(ii),'batch.sh')
+                i+=1
                 sys.exit()
            
             elif sys.argv[i] == '--thermal_expansion':
                 tagfound = True
-                for ii in range(i,len(sys.argv)):
+                #set tags as false to start
+                withbounds = False
+                withsolver = False
+                withBEC    = False
+                withDFTU0  = False
+                for ii in range(i+1,len(sys.argv)):
                     if sys.argv[ii] =='--bounds':
                         withbounds = True
+                    elif sys.argv[ii] == '--solver':
+                        withsolver = True
+                    elif sys.argv[ii] == '--BEC':
+                        withBEC   = True
+                    elif sys.argv[ii] == '--DFTU0':
+                        withDFTU0  = True
                     else:
-                        withbounds = False
+                        print('%s is not a valid tag.  See help menu.' %sys.argv[ii])
+                        sys.exit()
+                tags = [withbounds,withsolver,withBEC,withDFTU0]
                 
                 #looks for the file we already named
                 DFT_INPUT = 'data_extraction'
                     
                 diff_volumes,speccell = determine_volumes()
                 
-                make_folder('free_energies')
+                if not os.path.isdir('free_energies'):
+                    make_folder('free_energies')
                 
                 #check data_extraction for the correct header
                 printline        = True
@@ -2914,15 +3215,17 @@ def sortflags():
                             printline = False
                         elif 'free_energy_' in line:
                            calc_free_energy = False #checks the case the header was written by the free energy files are not produced                   
+                           
                 if printline == True:
                     with open('data_extraction','a') as f:
                         f.write('Free energy on grid filenames\n')
                         calc_free_energy = True
+                        
                 if calc_free_energy == True:
                     #determine what to do for different symmetries if not already done  
                     print('Starting calculation of dispersion relations and density of states.')             
                     if diff_volumes == 6:
-                        print('   Looking for 6 different volume files...')
+                        print('   Looking for %s different volume files...' %diff_volumes)
                         for i in range(diff_volumes):
                             writeline = False
                             if os.path.isfile('lattice_'+str(i)+'/configs/outfile.free_energy'):
@@ -2930,7 +3233,10 @@ def sortflags():
                                 #gather all files into a single place by copying the file from its 
                                 #current folder to a new destination and rename it
                                 a,b,c,vol = get_lattice('lattice_'+str(i)+'/POSCAR')
-                                engtot = get_energy('lattice_'+str(i)+'/relaxation2/OUTCAR')
+                                if withDFTU0 == True:
+                                    engtot = get_energy('lattice_'+str(i)+'/configs/outfile.U0')
+                                else:
+                                    engtot = get_energy('lattice_'+str(i)+'/relaxation2/OUTCAR')
                                 
                                 newfilename = 'free_energy_'+str(i)+'_'+str(a)+'_'+str(b)+'_'+str(c)+'_'+str(engtot)+'_'+str(vol)
                                 copy_file('lattice_'+str(i)+'/configs/outfile.free_energy','free_energies/'+newfilename)
@@ -2943,31 +3249,41 @@ def sortflags():
                                         f.write(newfilename+'\n')
                             else:
                                 #go into the file folder for each volume calculation and run tdep
-                                generate_batch('script','lattice_'+str(i)+'/configs/gather.sh')
+                                if withBEC == True or withsolver == True:
+                                    generate_batch('script','lattice_'+str(i)+'/configs/gather.sh',tags)
+                                else:
+                                    generate_batch('script','lattice_'+str(i)+'/configs/gather.sh','')
+                                    
                                 launch_script('lattice_'+str(i)+'/configs','gather.sh')
                                 
                                 #gather all files into a single place by copying the file from its 
                                 #current folder to a new destination and rename it
                                 a,b,c,vol = get_lattice('lattice_'+str(i)+'/POSCAR')
-                                engtot = get_energy('lattice_'+str(i)+'/relaxation2/OUTCAR')
+                                if withDFTU0 == True:
+                                    engtot = get_energy('lattice_'+str(i)+'/configs/outfile.U0')
+                                else:
+                                    engtot = get_energy('lattice_'+str(i)+'/relaxation2/OUTCAR')
                                 
                                 newfilename = 'free_energy_'+str(i)+'_'+str(a)+'_'+str(b)+'_'+str(c)+'_'+str(engtot)+'_'+str(vol)
                                 copy_file('lattice_'+str(i)+'/configs/outfile.free_energy','free_energies/'+newfilename)
                                 with open('data_extraction','a') as f:
                                     f.write(newfilename+'\n')
                             
-                    elif diff_volumes == 25:
-                        print('   Looking for 25 different volume files...')
+                    elif diff_volumes == 49:
+                        print('   Looking for %s different volume files...' %diff_volumes)
                         cc= 0
-                        for i in range(5):
-                            for j in range(5):
+                        for i in range(int(np.sqrt(diff_volumes))):
+                            for j in range(int(np.sqrt(diff_volumes))):
                                 writeline = False
                                 if os.path.isfile('lattice_'+str(cc)+'/configs/outfile.free_energy'):
                                     print('   Free_energy file found for volume %s' %cc)
                                     #gather all files into a single place by copying the file from its 
                                     #current folder to a new destination and rename it
                                     a,b,c,vol = get_lattice('lattice_'+str(cc)+'/POSCAR')
-                                    engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
+                                    if withDFTU0 == True:
+                                        engtot = get_energy('lattice_'+str(cc)+'/configs/outfile.U0')
+                                    else:
+                                        engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
                                     
                                     newfilename = 'free_energy_'+str(i)+str(j)+'_'+str(a)+'_'+str(b)+'_'+str(c)+'_'+str(engtot)+'_'+str(vol)
                                     copy_file('lattice_'+str(cc)+'/configs/outfile.free_energy','free_energies/'+newfilename)
@@ -2981,13 +3297,20 @@ def sortflags():
                                             f.write(newfilename+'\n')
                                 else:
                                     #go into the file folder for each volume calculation and run tdep
-                                    generate_batch('script','lattice_'+str(cc)+'/configs/gather.sh')
+                                    if withBEC == True or withsolver == True:
+                                        generate_batch('script','lattice_'+str(cc)+'/configs/gather.sh',tags)
+                                    else:
+                                        generate_batch('script','lattice_'+str(cc)+'/configs/gather.sh','')
+                                        
                                     launch_script('lattice_'+str(cc)+'/configs','gather.sh')
                                     
                                     #gather all files into a single place by copying the file from its 
                                     #current folder to a new destination and rename it
                                     a,b,c,vol = get_lattice('lattice_'+str(cc)+'/POSCAR')
-                                    engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
+                                    if withDFTU0 == True:
+                                        engtot = get_energy('lattice_'+str(cc)+'/configs/outfile.U0')
+                                    else:
+                                        engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
                                     
                                     newfilename = 'free_energy_'+str(i)+str(j)+'_'+str(a)+'_'+str(b)+'_'+str(c)+'_'+str(engtot)+'_'+str(vol)
                                     copy_file('lattice_'+str(cc)+'/configs/outfile.free_energy','free_energies/'+newfilename)
@@ -2995,19 +3318,22 @@ def sortflags():
                                     with open('data_extraction','a') as f:
                                         f.write(newfilename+'\n')
                                 
-                    elif diff_volumes == 75:
-                        print('   Looking for 75 different volume files...')
+                    elif diff_volumes == 343:
+                        print('   Looking for %s different volume files...' %diff_volumes)
                         cc= 0
-                        for i in range(5):
-                            for j in range(5):
-                                for k in range(5):
+                        for i in range(int(diff_volumes**(1/3))):
+                            for j in range(int(diff_volumes**(1/3))):
+                                for k in range(int(diff_volumes**(1/3))):
                                     writeline = False
                                     if os.path.isfile('lattice_'+str(cc)+'/configs/outfile.free_energy'):
                                         print('   Free_energy file found for volume %s' %cc)
                                         #gather all files into a single place by copying the file from its 
                                         #current folder to a new destination and rename it
                                         a,b,c,vol = get_lattice('lattice_'+str(cc)+'/POSCAR')
-                                        engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
+                                        if withDFTU0 == True:
+                                            engtot = get_energy('lattice_'+str(cc)+'/configs/outfile.U0')
+                                        else:
+                                            engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
                                         
                                         newfilename = 'free_energy_'+str(i)+str(j)+str(k)+'_'+str(a)+'_'+str(b)+'_'+str(c)+'_'+str(engtot)+'_'+str(vol)
                                         copy_file('lattice_'+str(cc)+'/configs/outfile.free_energy','free_energies/'+newfilename)
@@ -3021,13 +3347,20 @@ def sortflags():
                                                 f.write(newfilename+'\n')
                                     else:
                                         #go into the file folder for each volume calculation and run tdep
-                                        generate_batch('script','lattice_'+str(cc)+'/configs/gather.sh')
+                                        if withBEC == True or withsolver == True:
+                                            generate_batch('script','lattice_'+str(cc)+'/configs/gather.sh',tags)
+                                        else:
+                                            generate_batch('script','lattice_'+str(cc)+'/configs/gather.sh','')
+                                            
                                         launch_script('lattice_'+str(cc)+'/configs','gather.sh')
                                         
                                         #gather all files into a single place by copying the file from its 
                                         #current folder to a new destination and rename it
                                         a,b,c,vol = get_lattice('lattice_'+str(cc)+'/POSCAR')
-                                        engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
+                                        if withDFTU0 == True:
+                                            engtot = get_energy('lattice_'+str(cc)+'/configs/outfile.U0')
+                                        else:
+                                            engtot = get_energy('lattice_'+str(cc)+'/relaxation2/OUTCAR')
                                         
                                         newfilename = 'free_energy_'+str(i)+str(j)+str(k)+'_'+str(a)+'_'+str(b)+'_'+str(c)+'_'+str(engtot)+'_'+str(vol)
                                         copy_file('lattice_'+str(cc)+'/configs/outfile.free_energy','free_energies/'+newfilename)
@@ -3037,17 +3370,20 @@ def sortflags():
                 
                 print('Starting calculation of temperature-dependent properties.')
                 #run main thermal program to extract all temperature dependent quantities
-                main_thermal(DFT_INPUT,withbounds)
+                main_thermal(DFT_INPUT,tags)
+                i+=1
                 sys.exit()
     
             elif sys.argv[i] == '--move_file':
                 tagfound = True
                 move_file(sys.argv[i+1],sys.argv[i+2],sys.argv[i+3])
+                i+=1
                 sys.exit()
                 
             elif sys.argv[i] == '--copy_file':
                 tagfound = True
                 copy_file(sys.argv[i+1],sys.argv[i+2])
+                i+=1
                 sys.exit()
                 
             elif sys.argv[i] == '--launch_calc':
@@ -3058,7 +3394,7 @@ def sortflags():
                 
             elif sys.argv[i] == '--generate_batch':
                 tagfound = True
-                generate_batch(sys.argv[i+1],sys.argv[i+2])
+                generate_batch(sys.argv[i+1],sys.argv[i+2],'')
                 i+=1
                 sys.exit()
             
@@ -3067,7 +3403,7 @@ def sortflags():
                 generate_KPOINT(float(sys.argv[i+1]))
                 i+=1
                 sys.exit()
-                
+                            
             elif sys.argv[i] == '--vasp_converge':
                 tagfound = True
                 vasp_converge(sys.argv[i+1])
@@ -3086,7 +3422,10 @@ def sortflags():
                     DFT_INPUT = sys.argv[i+1]
                 except IndexError:
                     DFT_INPUT = 'data_extraction'
-                main_thermal(DFT_INPUT,withbounds = True)
+                #tags withbounds, withsolver,withbec,withDFTU0
+                tags = [True,False,True,False]
+
+                main_thermal(DFT_INPUT,tags)
                 i+=1
                 sys.exit()
                 
@@ -3094,8 +3433,6 @@ def sortflags():
                 print('ERROR: The tag %s is not reconized by the program.  Please use --help \n to see available tags.' %sys.argv[i])
                 sys.exit()
         i+= 1        
-
-
 
     return None
 
