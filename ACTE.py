@@ -8,7 +8,7 @@ Purpose: Calculation of the thermal expansion coefficients
          
 Notes: - Oct 4th start of program 
        - Apr 5th two dimensional fit for free energy
-       - Sep 7th three dimensional fit for free energy
+       - Nov 21th three dimensional fit for free energy 
        
 """
 #import needed functions
@@ -20,6 +20,7 @@ import numpy as np
 import scipy.optimize as so
 import scipy.constants as sc
 import scipy.signal as sg 
+import scipy.interpolate as IP
 
 plotfigs   = True
 
@@ -146,8 +147,7 @@ qgrid     = '30 30 30'  #q point grid density for DOS
 iter_type = '3'         #method for numerical integration
 n_configs = '12'        #number of configurations
 t_configs = '1000'      #temperature of configurations (for better calculations of the 
-                        # CTE please keep the configuration temperature approximently 
-                        # equal to the debye temperture)
+                        # CTE please keep the configuration temperature less than the Debye temperature)
 
 """
 ##############################################################################
@@ -231,7 +231,7 @@ def READ_INPUT_DFT(DFT_INPUT):
             elif line.startswith('Free energy on grid filenames'):
                 #need to read in the next 25 filenames
                 files = []
-                for y in range(25):
+                for y in range(350):
                     with open(DFT_INPUT,'r') as h:
                         for j,line2 in enumerate(h):
                             l = line2.strip('\n').split(' ')
@@ -333,8 +333,32 @@ def linear_exp(cell_data,tags):
         Anisotropic system with two similiar axis (hexgonal first with c as the free axis)
         """
     elif np.abs(a0-b0)<= difftol and np.abs(a0-c0) >difftol :
-        volnum       = 25
+        volnum       = 36
         num_unique   = 2
+        #step 1: read in free energy files
+        latt_array,vol_array,engy_array,free_array,cell_data = read_free_energies(volnum,num_unique,cell_data)
+        
+        #step 2: determine the lattice parameters that minimize the temperature
+        latt_data,cell_data = minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,withbounds,withDFTU0)
+                       
+        #step 3: Fit the equation of state
+        bulkT,cell_data = fit_EOS(volnum,num_unique,cell_data,engy_array,free_array,vol_array,withbounds)
+            
+        #step 4: Calculate coefficients of thermal expansion
+        lattder, cell_data = find_CTE(volnum,num_unique,cell_data,latt_data)
+
+        #step 5: Calculate specific heat at constant pressure
+        sheat,cell_data = find_CP(volnum,num_unique,cell_data,lattder,bulkT,total_mass)
+                
+        #step 6: print all calculations to a file
+        print_all(volnum,num_unique,cell_data,free_array,latt_data,lattder,bulkT,sheat)
+        
+        """
+        Fully anisotropic system
+        """
+    elif np.abs(a0-b0)> difftol and np.abs(a0-c0) >difftol :
+        volnum       = 216
+        num_unique   = 3
         #step 1: read in free energy files
         latt_array,vol_array,engy_array,free_array,cell_data = read_free_energies(volnum,num_unique,cell_data)
         
@@ -399,12 +423,15 @@ def read_free_energies(volnum,num_unique,cell_data):
                     if l[1] != 'NaN':
                         free_array[i][num] = float(l[1])
                     if float(l[1]) > 3.0E8:
-                        print('   ERROR: Free energy calculation for %i may have an instability. Will relaunch at end.'%i)
-                        print('   Suggestion: Plot the dispersion relation to view the instability.')
                         found_unstable = True
-                        unstable_files = np.append(unstable_files,files)
-                        unstable_numbs = np.append(unstable_numbs,i)
-                        
+
+            if found_unstable == True:
+                print('   ERROR: Free energy calculation for %i may have an instability. Will relaunch at end.'%i)
+                print('   Suggestion: Plot the dispersion relation to view the instability.')
+                unstable_files = np.append(unstable_files,file)
+                unstable_numbs = np.append(unstable_numbs,i)   
+                found_unstable = False
+                
             i+=1
                 
     elif num_unique == 2:
@@ -430,14 +457,53 @@ def read_free_energies(volnum,num_unique,cell_data):
                     if l[1] != 'NaN':
                         free_array[i][num] = float(l[1])
                     if float(l[1]) > 3.0E8:
-                        print('   ERROR: Free energy calculation for %i may have an instability. Will relaunch at end.'%i)
-                        print('   Suggestion: Plot the dispersion relation to view the instability.')                        
                         found_unstable = True
-                        unstable_files = np.append(unstable_files,files)
-                        unstable_numbs = np.append(unstable_numbs,i)
+                        
+            if found_unstable == True:
+                print('   ERROR: Free energy calculation for %i may have an instability. Will relaunch at end.'%i)
+                print('   Suggestion: Plot the dispersion relation to view the instability.')
+                unstable_files = np.append(unstable_files,file)
+                unstable_numbs = np.append(unstable_numbs,i) 
+                found_unstable = False
 
             i+=1
-    if found_unstable == True:
+            
+    elif num_unique == 3:
+        i = 0
+        for file in files:
+            #use the file name to determine the lattice constants
+            l = file.split('_')
+            latt_array[i][0] = float(l[3]) # a lattice
+            latt_array[i][1] = float(l[5]) # b lattice
+            latt_array[i][2] = float(l[6]) # b lattice
+            engy_array[i][0] = float(l[7]) # U_0 (a)
+            vol_array        = np.append(vol_array,float(l[8])) #volume
+            
+            try: 
+                os.path.isfile('free_energies/'+file)
+                
+            except:
+                print('ERROR: The file %s was not found in the directory or contains errors.' %file)
+                sys.exit()    
+                
+            with open('free_energies/'+file,'r') as f:
+                for num,line in enumerate(f,0):
+                    l = line.strip('\n').split()
+                    if l[1] != 'NaN':
+                        free_array[i][num] = float(l[1])
+                    if float(l[1]) > 3.0E8:
+                        found_unstable = True
+                        
+            if found_unstable == True:
+                print('   ERROR: Free energy calculation for %i may have an instability. Will relaunch at end.'%i)
+                print('   Suggestion: Plot the dispersion relation to view the instability.')
+                unstable_files = np.append(unstable_files,file)
+                unstable_numbs = np.append(unstable_numbs,i) 
+                found_unstable = False
+
+            i+=1            
+            
+    if unstable_numbs !=[]:
         relaunch_configs(unstable_numbs,unstable_files)
         sys.exit()
                               
@@ -454,29 +520,35 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
     """
     #gather necessary information
     a0              = cell_data[1]/ang_to_m
-    #b0              = cell_data[2]/ang_to_m
+    b0              = cell_data[2]/ang_to_m
     c0              = cell_data[3]/ang_to_m
     numatoms        = float(cell_data[4]) 
     Tmin            = int(cell_data[23])
     Tmax            = int(cell_data[24])
     tempsteps       = int(cell_data[25])
-    
+    desired_acc     = 1.0E-3
+
     #build arrays
     x         = []
     y         = []
+    t         = []
     latt_data = np.empty(shape=(4,tempsteps))
     
     print('   2 - Generating the fits for each temperature and \n'\
           '       finding the minimum set of coordinates.')
     print('       ---Brief pauses are normal---')
     
+    with open('out.coefficients','w') as f:
+        f.write('# Output coefficients of fit to free energy polynomial.\n')
+        f.write('# tstep  cof[0] cof[1] ... etc\n')
+    
+    if withbounds == True:
+        print('       Bounds are being used.')
+        
+    if withDFTU0 == True:
+        print('       Internal energy from DFT is being used.')
+    
     if num_unique == 1:
-        if withbounds == True:
-            print('       Bounds are being used.')
-            
-        if withDFTU0 == True:
-            print('       Internal energy from DFT is being used.')
-            
         for i in range(int(volnum)):
             x = np.append(x,latt_array[i][0])
                 
@@ -485,13 +557,12 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
         xmax = max(x)
         
         #determine the density by looking at the required accuracy in the lattice parameters
-        desired_acc   = 1.0E-4
         density_array = [(xmax-xmin)/desired_acc]
         density       = int(max(density_array))
             
         print('       number of new lattice points:         %s'%density) 
         print('       total number of extrapulation points: %s' %(density))  
-        
+                
         #generate list of coordinates for each temperature   
         for i in range(tempsteps):
             z         = []
@@ -511,7 +582,7 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
             
             #find best fit 6th order fit 
             #this is written in the same order as the coefficients of the fit. I.e. c00 , c10, c20 etc.
-            A = np.c_[x*0.0+1.0,x, x**2,x**3,x**4,x**5,x**6]
+            A = np.c_[x*0.0+1.0,x, x**2,x**3,x**4]
 
             #C contains the coefficients to the polynomial we are trying to fit. 
             # if statement added to handle bad behavior in older versions of numpy
@@ -530,7 +601,7 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
         
             if plotfigs:
                 #Z is the surface on a denser grid of points corresponding to a denser grid
-                Z = np.dot(np.c_[XX*0.0+1.0,XX, XX**2,XX**3,XX**4,XX**5,XX**6],C).reshape(X.shape)
+                Z = np.dot(np.c_[XX*0.0+1.0,XX, XX**2,XX**3,XX**4],C).reshape(X.shape)
             
                 # plot points and fit surface for the zero of temperature nowever, plotting
                 # might not be available on all machines
@@ -547,6 +618,10 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
                     plt.savefig(figname,bbox_inches='tight')
                     plt.close()
                    
+            #print the coefficients, C, to a file as a function of temperature
+            with open('out.coefficients','a') as f:
+                f.write('%s %s %s %s %s %s\n' %(i,C[0],C[1],C[2],C[3],C[4]))
+                
             #use the BFGS method to determine the point that minimizes the function
             if i == 0:
                 initial_guess = [a0]
@@ -556,10 +631,10 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
             if withbounds == True:
                 bounds        = [(xmin,xmax),] #bounds of free energy grid
             
-                result = so.minimize(sixthorder_ploy,initial_guess,
+                result = so.minimize(fourthorder_ploy,initial_guess,
                                 method='L-BFGS-B',args=(C,),bounds=bounds)
             else:
-                result = so.minimize(sixthorder_ploy,initial_guess,
+                result = so.minimize(fourthorder_ploy,initial_guess,
                                 method='BFGS',args=(C,))
                     
             #gather results from optimization routine
@@ -567,15 +642,9 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
             latt_data[1][i] = result.x[0]
             
     elif num_unique == 2:
-        if withbounds == True:
-            print('       Bounds are being used.')
-            
-        if withDFTU0 == True:
-            print('       Internal energy from DFT is being used.')
-                    
         for i in range(int(volnum)):
             x = np.append(x,latt_array[i][0])
-            y = np.append(y,latt_array[i][1])   
+            y = np.append(y,latt_array[i][2]) #here y is the c direction   
             
         #find max and min of the lattice parameters
         xmin = min(x)
@@ -584,7 +653,6 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
         ymax = max(y)
         
         #determine the density by looking at the required accuracy in the lattice parameters
-        desired_acc   = 1E-3
         density_array = [(xmax-xmin)/desired_acc,(ymax-ymin)/desired_acc]
         density       = int(max(density_array))
             
@@ -592,7 +660,6 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
         print('       total number of extrapulation points: %s' %(density*density))       
         
         #generate list of coordinates for each temperature   
-        fitparams = []
         for i in range(tempsteps):
             z = []
             for j in range(int(volnum)):
@@ -608,34 +675,21 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
                 print('ERROR: The dimensions of either x,y, or z are unequal.')
                 print('The dimensions of the arrays are %s %s %s.'%(x.shape[0],y.shape[0],z.shape[0]))
                 sys.exit()
-                
-            if i == 0:
-                p0 = np.ones(49)
-            else:
-                p0 = fitparams
-            
-            fitparams, fitcov = so.curve_fit(twelththorder_ploy,[x,y],z,p0 = p0)
-            
-            print(fitparams)
-            
-            sys.exit()
-                
+
             #find best fit 6th order fit             
-#            A = np.c_[x**0*y**0, x**1*y**0, x**2*y**0, x**3*y**0, x**4*y**0, x**5*y**0, x**6*y**0,
-#                      x**0*y**1, x**1*y**1, x**2*y**1, x**3*y**1, x**4*y**1, x**5*y**1, x**6*y**1,
-#                      x**0*y**2, x**1*y**2, x**2*y**2, x**3*y**2, x**4*y**2, x**5*y**2, x**6*y**2,
-#                      x**0*y**3, x**1*y**3, x**2*y**3, x**3*y**3, x**4*y**3, x**5*y**3, x**6*y**3,
-#                      x**0*y**4, x**1*y**4, x**2*y**4, x**3*y**4, x**4*y**4, x**5*y**4, x**6*y**4,
-#                      x**0*y**5, x**1*y**5, x**2*y**5, x**3*y**5, x**4*y**5, x**5*y**5, x**6*y**5,
-#                      x**0*y**6, x**1*y**6, x**2*y**6, x**3*y**6, x**4*y**6, x**5*y**6, x**6*y**6]
+            A = np.c_[x**0*y**0+1, x**1*y**0, x**2*y**0, x**3*y**0, x**4*y**0,
+                      x**0*y**1, x**1*y**1, x**2*y**1, x**3*y**1, x**4*y**1,
+                      x**0*y**2, x**1*y**2, x**2*y**2, x**3*y**2, x**4*y**2,
+                      x**0*y**3, x**1*y**3, x**2*y**3, x**3*y**3, x**4*y**3,
+                      x**0*y**4, x**1*y**4, x**2*y**4, x**3*y**4, x**4*y**4]
             
             #C contains the coefficients to the polynomial we are trying to fit. 
             # if statement added to handle bad behavior in older versions of numpy
-#            try: 
-#                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1)
-#                 
-#            except FutureWarning:
-#                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1) 
+            try: 
+                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1)
+                 
+            except FutureWarning:
+                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1) 
             
             #now that we have the coefficients, we can make a much denser grid to find the 
             #minimum value.
@@ -646,19 +700,17 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
             YY = Y.flatten()
         
             if plotfigs:
-                #Z is the surface on a denser grid of points corresponding to a denser grid
-                Z = np.dot(np.c_[XX*0.0+1.0,XX, XX**2,XX**3,XX**4,XX**5,XX**6,
-                          YY,XX*YY, XX**2*YY,XX**3*YY,XX**4*YY,XX**5*YY,XX**6*YY,
-                          YY**2,XX*YY**2, XX**2*YY**2,XX**3*YY**2,XX**4*YY**2,XX**5*YY**2,XX**6*YY**2,
-                          YY**3,XX*YY**3, XX**2*YY**3,XX**3*YY**3,XX**4*YY**3,XX**5*YY**3,XX**6*YY**3,
-                          YY**4,XX*YY**4, XX**2*YY**4,XX**3*YY**4,XX**4*YY**4,XX**5*YY**4,XX**6*YY**4,
-                          YY**5,XX*YY**5, XX**2*YY**5,XX**3*YY**5,XX**4*YY**5,XX**5*YY**5,XX**6*YY**5,
-                          YY**6,XX*YY**6, XX**2*YY**6,XX**3*YY**6,XX**4*YY**6,XX**5*YY**6,XX**6*YY**6],C).reshape(X.shape)
-            
+                if i%200 == 0:
+                    #Z is the surface on a denser grid of points corresponding to a denser grid
+                    Z = np.dot(np.c_[XX**0*YY**0+1, XX**1*YY**0, XX**2*YY**0, XX**3*YY**0, XX**4*YY**0,
+                      XX**0*YY**1, XX**1*YY**1, XX**2*YY**1, XX**3*YY**1, XX**4*YY**1,
+                      XX**0*YY**2, XX**1*YY**2, XX**2*YY**2, XX**3*YY**2, XX**4*YY**2,
+                      XX**0*YY**3, XX**1*YY**3, XX**2*YY**3, XX**3*YY**3, XX**4*YY**3,
+                      XX**0*YY**4, XX**1*YY**4, XX**2*YY**4, XX**3*YY**4, XX**4*YY**4],C).reshape(X.shape)
+                
                 # plot points and fit surface for the zero of temperature nowever, plotting
                 # might not be available on all machines
-               
-                if i%200 == 0:
+                             
                     fig = plt.figure()
                     ax = fig.gca(projection='3d')
                     ax.plot_surface(X,Y,Z, rstride=1, cstride=1, alpha=0.1)
@@ -671,25 +723,137 @@ def minimize_free(volnum,num_unique,cell_data,latt_array,engy_array,free_array,w
                     figname = 'freeenergy_at_'+str(i)
                     plt.savefig(figname,bbox_inches='tight')
                     plt.close()
+            
+            #print the coefficients, C, to a file as a function of temperature
+            with open('out.coefficients','a') as f:
+                f.write('%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s '\
+                        '%s %s %s %s %s\n' 
+                        %(i,C[0],C[1],C[2],C[3],C[4],C[5],C[6],C[7],C[8],C[9],C[10],C[11],
+                            C[12],C[13],C[14],C[15],C[16],C[17],C[18],C[19],C[20],C[21],C[22],C[23],
+                            C[24]))
                                               
             #use the BFGS method to determine the point that minimizes the function
+            tol = 1E-10
             if i == 0:
                 initial_guess = [a0,c0]
             else:
-                initial_guess = [latt_data[1][i-1],latt_data[2][i-1]]
+                initial_guess = [latt_data[1][i-1],latt_data[3][i-1]]
 
             if withbounds == True:
                 bounds    = [(xmin,xmax),(ymin,ymax)] #bounds of free energy grid
-                result    = so.minimize(twelththorder_ploy,initial_guess,args=(C),
-                                     method='L-BFGS-B',bounds = bounds)
+                result    = so.minimize(eighthorder_ploy,initial_guess,args=(C),
+                                     method='L-BFGS-B',bounds = bounds,tol = tol)
             else:
-                result    = so.minimize(twelththorder_ploy,initial_guess,args=(C),
-                                     method='BFGS')
+                result    = so.minimize(eighthorder_ploy,initial_guess,args=(C),
+                                     method='BFGS',tol = tol)
 
             #gather results from optimization routine
             latt_data[0][i] = Tmin+(Tmax-Tmin)/tempsteps*i
             latt_data[1][i] = result.x[0]
-            latt_data[2][i] = result.x[1]
+            latt_data[3][i] = result.x[1]
+            
+    elif num_unique == 3:
+        for i in range(int(volnum)):
+            x = np.append(x,latt_array[i][0]) # a 
+            y = np.append(y,latt_array[i][1]) # b 
+            t = np.append(t,latt_array[i][2]) # c
+            
+        #find max and min of the lattice parameters
+        xmin = min(x)
+        xmax = max(x)
+        ymin = min(y)
+        ymax = max(y)
+        tmin = min(t)
+        tmax = max(t)
+        
+        #determine the density by looking at the required accuracy in the lattice parameters
+        density_array = [(xmax-xmin)/desired_acc,(ymax-ymin)/desired_acc,(tmax-tmin)/desired_acc]
+        density       = int(max(density_array))
+            
+        print('       number of new lattice points:         %s'%density) 
+        print('       total number of extrapulation points: %s' %(density*density*density))       
+        
+        #generate list of coordinates for each temperature   
+        for i in range(tempsteps):
+            z = []
+            for j in range(int(volnum)):
+                if withDFTU0 == True:
+                    z = np.append(z,(engy_array[j][0]+numatoms*free_array[j][i]))  #Add internal energy to each point.
+                else:
+                    z = np.append(z,(numatoms*(engy_array[j][0]+free_array[j][i])))  #Add internal energy to each point.
+                        
+            #internal test that they are all the same length
+            try:
+                x.shape[0] == y.shape[0] == z.shape[0] == t.shape[0]
+            except:
+                print('ERROR: The dimensions of either x,y, or z are unequal.')
+                print('The dimensions of the arrays are %s %s %s.'%(x.shape[0],y.shape[0],z.shape[0]))
+                sys.exit()
+
+            #find best fit 6th order fit             
+            A = np.c_[x**0*y**0*t**0+1, x**1*y**0*t**0, x**2*y**0*t**0, x**3*y**0*t**0, x**4*y**0*t**0,
+                      x**0*y**1*t**0, x**1*y**1*t**0, x**2*y**1*t**0, x**3*y**1*t**0, x**4*y**1*t**0,
+                      x**0*y**2*t**0, x**1*y**2*t**0, x**2*y**2*t**0, x**3*y**2*t**0, x**4*y**2*t**0,
+                      x**0*y**3*t**0, x**1*y**3*t**0, x**2*y**3*t**0, x**3*y**3*t**0, x**4*y**3*t**0,
+                      x**0*y**4*t**0, x**1*y**4*t**0, x**2*y**4*t**0, x**3*y**4*t**0, x**4*y**4*t**0,
+                      x**0*y**0*t**1, x**1*y**0*t**1, x**2*y**0*t**1, x**3*y**0*t**1, x**4*y**0*t**1,
+                      x**0*y**1*t**1, x**1*y**1*t**1, x**2*y**1*t**1, x**3*y**1*t**1, x**4*y**1*t**1,
+                      x**0*y**2*t**1, x**1*y**2*t**1, x**2*y**2*t**1, x**3*y**2*t**1, x**4*y**2*t**1,
+                      x**0*y**3*t**1, x**1*y**3*t**1, x**2*y**3*t**1, x**3*y**3*t**1, x**4*y**3*t**1,
+                      x**0*y**4*t**1, x**1*y**4*t**1, x**2*y**4*t**1, x**3*y**4*t**1, x**4*y**4*t**1,
+                      x**0*y**0*t**2, x**1*y**0*t**2, x**2*y**0*t**2, x**3*y**0*t**2, x**4*y**0*t**2,
+                      x**0*y**1*t**2, x**1*y**1*t**2, x**2*y**1*t**2, x**3*y**1*t**2, x**4*y**1*t**2,
+                      x**0*y**2*t**2, x**1*y**2*t**2, x**2*y**2*t**2, x**3*y**2*t**2, x**4*y**2*t**2,
+                      x**0*y**3*t**2, x**1*y**3*t**2, x**2*y**3*t**2, x**3*y**3*t**2, x**4*y**3*t**2,
+                      x**0*y**4*t**2, x**1*y**4*t**2, x**2*y**4*t**2, x**3*y**4*t**2, x**4*y**4*t**2,
+                      x**0*y**0*t**3, x**1*y**0*t**3, x**2*y**0*t**3, x**3*y**0*t**3, x**4*y**0*t**3,
+                      x**0*y**1*t**3, x**1*y**1*t**3, x**2*y**1*t**3, x**3*y**1*t**3, x**4*y**1*t**3,
+                      x**0*y**2*t**3, x**1*y**2*t**3, x**2*y**2*t**3, x**3*y**2*t**3, x**4*y**2*t**3,
+                      x**0*y**3*t**3, x**1*y**3*t**3, x**2*y**3*t**3, x**3*y**3*t**3, x**4*y**3*t**3,
+                      x**0*y**4*t**3, x**1*y**4*t**3, x**2*y**4*t**3, x**3*y**4*t**3, x**4*y**4*t**3,
+                      x**0*y**0*t**4, x**1*y**0*t**4, x**2*y**0*t**4, x**3*y**0*t**4, x**4*y**0*t**4,
+                      x**0*y**1*t**4, x**1*y**1*t**4, x**2*y**1*t**4, x**3*y**1*t**4, x**4*y**1*t**4,
+                      x**0*y**2*t**4, x**1*y**2*t**4, x**2*y**2*t**4, x**3*y**2*t**4, x**4*y**2*t**4,
+                      x**0*y**3*t**4, x**1*y**3*t**4, x**2*y**3*t**4, x**3*y**3*t**4, x**4*y**3*t**4,
+                      x**0*y**4*t**4, x**1*y**4*t**4, x**2*y**4*t**4, x**3*y**4*t**4, x**4*y**4*t**4]
+            
+            #C contains the coefficients to the polynomial we are trying to fit. 
+            # if statement added to handle bad behavior in older versions of numpy
+            try: 
+                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1)
+                 
+            except FutureWarning:
+                C,_,_,_ = np.linalg.lstsq(A, z,rcond=-1) 
+
+            #print the coefficients, C, to a file as a function of temperature
+            with open('out.coefficients','a') as f:
+                f.write('%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s '\
+                        '%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s '\
+                        '%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s '\
+                        '%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s '\
+                        '%s %s %s %s %s\n' 
+                        %(i,*C))
+                                              
+            #use the BFGS method to determine the point that minimizes the function
+            tol = 1E-10
+            if i == 0:
+                initial_guess = [a0,b0,c0]
+            else:
+                initial_guess = [latt_data[1][i-1],latt_data[2][i-1],latt_data[3][i-1]]
+
+            if withbounds == True:
+                bounds    = [(xmin,xmax),(ymin,ymax),(tmin,tmax)] #bounds of free energy grid
+                result    = so.minimize(sixthfourhorder_ploy,initial_guess,args=(C),
+                                     method='L-BFGS-B',bounds = bounds,tol = tol)
+            else:
+                result    = so.minimize(sixthfourhorder_ploy,initial_guess,args=(C),
+                                     method='BFGS',tol = tol)
+
+            #gather results from optimization routine
+            latt_data[0][i] = Tmin+(Tmax-Tmin)/tempsteps*i
+            latt_data[1][i] = result.x[0]
+            latt_data[2][i] = result.x[1]    
+            latt_data[3][i] = result.x[2] 
     
     return latt_data,cell_data
 
@@ -750,7 +914,7 @@ def fit_EOS(volnum,num_unique,cell_data,engy_array,free_array,vol_array,withboun
             x0 = plsq2
         
         if withbounds == True:
-            bounds = ((-1000,B0*0.5,0,V0*0.6),(0,B0*1.5,15,V0*1.2))
+            bounds = ((-1000,B0*0.4,0,V0*0.6),(0,B0*1.6,15,V0*1.2))
         else:
             bounds = ((-np.inf,-np.inf,-np.inf,-np.inf),( np.inf,np.inf,np.inf,np.inf))
             
@@ -797,32 +961,47 @@ def find_CTE(volnum,num_unique,cell_data,latt_data):
     Return:  
     """
     #declare useful information
-    window1    = 301 # must be odd, size of the data array to consider at one point
-    polyorder  = 3   # must be less than the window
+    tempsteps       = int(cell_data[25])
+    
+    #note that window1 must be an odd number!
+    if int(tempsteps*0.01)%2 == 0: #number is odd
+        window = int(tempsteps*0.01)+1
+    else:
+        window = int(tempsteps*0.01)
+    polyorder  = 1   # must be less than the window
+    tmin       = int(cell_data[23])
+    tmax       = int(cell_data[24])
     tempsteps  = int(cell_data[25])
-   
+    tspacing   = (tmax-tmin)/tempsteps
+    mode       = 'nearest'
+       
     #declare arrays
     xdata = latt_data[0][:] #temperature
     adata = latt_data[1][:] #a lattice
-    cdata = latt_data[2][:] #c lattice 
+    bdata = latt_data[2][:] #b lattice
+    cdata = latt_data[3][:] #c lattice 
     latt_der        = np.zeros(shape=(4,tempsteps)) 
     lattdata        = np.zeros(shape=(tempsteps,9))
  
     print('   4 - Calculate the coefficients of thermal expansion.') 
+    
+    #apply a filter to smooth out the data 
+    print('      Filtering data with Savitzky Golay Filter.')
+    print('      window    %s'%window)
+    print('      polyorder %s'%polyorder)
     if num_unique == 1:
         
-        #apply a filter to smooth out the data 
-        print('      Filtering data with Savitzky Golay Filter.')
-        print('      window    %s'%window1)
-        print('      polyorder %s'%polyorder)
-        ahat = sg.savgol_filter(adata,window1,polyorder)
-               
-        # take derivative of ahat using a gradient        
-        dera = np.gradient(ahat)
+        ahat = running_mean(adata,2*window) 
         
-        #divide by the lattice parameter itself
-        for i in range(len(ahat)):
-            dera[i] = dera[i]/ahat[i]
+        #take the log of the lattice parameter
+        for i in range(len(adata)):
+            ahat[i] = np.log(ahat[i])
+            
+        # take derivative of ahat using a gradient        
+        dera = np.gradient(ahat,tspacing)
+                    
+        #filter again
+        dera =sg.savgol_filter(dera,window,polyorder,mode=mode)            
         
         for i in range(int(tempsteps)):
             latt_der[0][i] = xdata[i]
@@ -846,21 +1025,22 @@ def find_CTE(volnum,num_unique,cell_data,latt_data):
             
     elif num_unique == 2:
         
-        #apply a filter to smooth out the data 
-        print('      Filtering data with Savitzky Golay Filter.')
-        print('      window    %s'%window1)
-        print('      polyorder %s'%polyorder)
-        ahat = sg.savgol_filter(adata,window1,polyorder)
-        chat = sg.savgol_filter(cdata,window1,polyorder)
-                                    
-        # take derivative of ahat using a gradient
-        dera = np.gradient(ahat)
-        derc = np.gradient(chat)
+        #smooth data before taking derivative
+        ahat = running_mean(adata,2*window)
+        chat = running_mean(cdata,2*window)
+
+        #take the log of the lattice parameter
+        for i in range(len(adata)):
+            ahat[i] = np.log(ahat[i])
+            chat[i] = np.log(chat[i])
         
-        #divide by the lattice parameter itself
-        for i in range(len(ahat)):
-            dera[i] = dera[i]/ahat[i]
-            derc[i] = derc[i]/chat[i]
+        # take derivative of ahat using a gradient
+        dera = np.gradient(ahat,tspacing)
+        derc = np.gradient(chat,tspacing)
+        
+        #filter again
+        dera = sg.savgol_filter(dera,window,polyorder,mode=mode)
+        derc = sg.savgol_filter(derc,window,polyorder,mode=mode)
                                
         for i in range(int(tempsteps)):
             latt_der[0][i] = xdata[i]
@@ -884,6 +1064,38 @@ def find_CTE(volnum,num_unique,cell_data,latt_data):
             plt.savefig(figname,bbox_inches='tight')
             plt.close() 
             
+    elif num_unique == 3:
+        
+        #smooth data before taking derivative
+        ahat = running_mean(adata,2*window)
+        bhat = running_mean(bdata,2*window)
+        chat = running_mean(cdata,2*window)
+
+        #take the log of the lattice parameter
+        for i in range(len(adata)):
+            ahat[i] = np.log(ahat[i])
+            bhat[i] = np.log(bhat[i])
+            chat[i] = np.log(chat[i])
+        
+        # take derivative of ahat using a gradient
+        dera = np.gradient(ahat,tspacing)
+        derb = np.gradient(bhat,tspacing)
+        derc = np.gradient(chat,tspacing)
+        
+        #filter again
+        dera = sg.savgol_filter(dera,window,polyorder,mode=mode)
+        derb = sg.savgol_filter(derb,window,polyorder,mode=mode)
+        derc = sg.savgol_filter(derc,window,polyorder,mode=mode)
+                      
+        for i in range(int(tempsteps)):
+            latt_der[0][i] = xdata[i]
+            latt_der[1][i] = dera[i]
+            latt_der[2][i] = derb[i]
+            latt_der[3][i] = derc[i]
+            lattdata[i][0] = latt_der[1][i]
+            lattdata[i][4] = latt_der[1][i]
+            lattdata[i][8] = latt_der[2][i]            
+            
     #save lattice expansion coefficients to cell_data for use by the rest of the program
     cell_data[10] = lattdata  
         
@@ -902,7 +1114,7 @@ def find_CP(volnum,num_unique,cell_data,lattder,bulkT,total_mass):
     #declare useful information 
     vol             = cell_data[0]      # DFT volume of unit cell at T=0K in m**3 
     a0              = cell_data[1]/ang_to_m
-    #b0              = cell_data[2]/ang_to_m
+    b0              = cell_data[2]/ang_to_m
     c0              = cell_data[3]/ang_to_m
     files           = cell_data[19]
     tempsteps       = int(cell_data[25])
@@ -995,6 +1207,34 @@ def find_CP(volnum,num_unique,cell_data,lattder,bulkT,total_mass):
             plt.savefig(figname,bbox_inches='tight')
             plt.close()
     
+    elif num_unique == 3:
+        for file in files:
+            #use the file name to determine the lattice constants
+            l = file.split('_')
+            a = float(l[3]) # a lattice
+            b = float(l[4]) # b lattice
+            c = float(l[5]) # c latice 
+            if np.abs(a-a0) < difftol and np.abs(c-c0) < difftol and np.abs(b-b0) < difftol:
+                foundfile = True
+                cvfile = file
+                
+        if not foundfile:
+            print('Free energy file corresponding to the relaxed DFT lattice parameters not found!')
+            sys.exit()
+            
+        i = 0
+        with open('free_energies/'+cvfile,'r') as f:
+            for num,line in enumerate(f,0):
+                l = line.strip('\n').split()
+                #this file contains 0- temperature, 1- vibrational free energy, 2- entropy, 3- specific heat
+                sheat[0][i] = float(l[0])
+                sheat[1][i] = float(l[3])
+                i += 1
+        
+        #determine cp using thermodynamics
+        for i in range(sheat.shape[1]):
+            alphaavg    = (lattder[i][0] + lattder[i][4]+ lattder[i][8])/3.0
+            sheat[2][i] = sheat[1][i] + vol*sheat[0][i]*alphaavg**2*bulkT[2][i]*J_to_cal/total_mass
     return sheat,cell_data
 
 def print_all(volnum,num_unique,cell_data,free_array,latt_data,lattder,bulkT,sheat):
@@ -1071,6 +1311,20 @@ def print_all(volnum,num_unique,cell_data,free_array,latt_data,lattder,bulkT,she
         #generate gnuplot file 
         gen_GNUPLOT('out.expansion_coeffs','expansion_coeffs.gnuplot',3,'expansion')
         
+    elif num_unique == 3:
+        #now that the minimum coordinates have been found we can print them to a file
+        f1= open('out.thermal_expansion','w')
+        f1.write('# Thermal lattice parameters \n#temp \t a \t b \t c\n' )
+        for i in range(latt_data.shape[1]):
+            f1.write('%s \t%s \t%s \t%s\n' %(latt_data[0][i],latt_data[1][i],latt_data[2][i] ,latt_data[3][i]))
+        f1.close()
+        
+        #generate gnuplot file 
+        gen_GNUPLOT('out.thermal_expansion','thermal_expansion.gnuplot',4,'thermal_lattice')
+                
+        #generate gnuplot file 
+        gen_GNUPLOT('out.expansion_coeffs','expansion_coeffs.gnuplot',3,'expansion')
+        
     #print this data to a file
     f1= open('out.isothermal_bulk','w')
     f1.write('# isothermal bulk modulus \n#temp \t E0 \t B \t dB/dp etc. \n' )
@@ -1122,7 +1376,7 @@ def Murnaghan(vol,E0, B0, BP,V0):
     
     return E
 
-def sixthorder_ploy(x, cof):
+def fourthorder_ploy(x, cof):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -1134,17 +1388,11 @@ def sixthorder_ploy(x, cof):
              
     """    
     # cof contains the fit coefficients of the 6th order polynomial of a and c
-    func = (cof[0]*x[0]**0 + cof[1]*x[0]**1 + cof[2]*x[0]**2 + cof[3]*x[0]**3 + cof[4]*x[0]**4 + cof[5]*x[0]**5 + cof[6]*x[0]**6)
+    func = (cof[0]*x[0]**0 + cof[1]*x[0]**1 + cof[2]*x[0]**2 + cof[3]*x[0]**3 + cof[4]*x[0]**4)
     
     return func
 
-def twelththorder_ploy(x, cof0,cof1,cof2,cof3,cof4,cof5,cof6,cof7,
-                       cof8,cof9,cof10,cof11,cof12,cof13,cof14,cof15,
-                       cof16,cof17,cof18,cof19,cof20,cof21,cof22,cof23,
-                       cof24,cof25,cof26,cof27,cof28,cof29,cof30,cof31,
-                       cof32,cof33,cof34,cof35,cof36,cof37,cof38,cof39,
-                       cof40,cof41,cof42,cof43,cof44,cof45,cof46,cof47,
-                       cof48):
+def eighthorder_ploy(x, cof):
     """
     Author: Nicholas Pike
     Email: Nicholas.pike@smn.uio.no
@@ -1156,15 +1404,78 @@ def twelththorder_ploy(x, cof0,cof1,cof2,cof3,cof4,cof5,cof6,cof7,
              
     """    
     # cof contains the fit coefficients of the 6th order polynomial of a and c
-    func = (cof0*x[0]**0*x[1]**0 + cof1*x[0]**1*x[1]**0 + cof2*x[0]**2*x[1]**0 + cof3*x[0]**3*x[1]**0 + cof4*x[0]**4*x[1]**0 + cof5*x[0]**5*x[1]**0 + cof6*x[0]**6*x[1]**0 +
-            cof7*x[0]**0*x[1]**1 + cof8*x[0]**1*x[1]**1 + cof9*x[0]**2*x[1]**1 + cof10*x[0]**3*x[1]**1 + cof11*x[0]**4*x[1]**1 + cof12*x[0]**5*x[1]**1 + cof13*x[0]**6*x[1]**1 + 
-            cof14*x[0]**0*x[1]**2 + cof15*x[0]**1*x[1]**2 + cof16*x[0]**2*x[1]**2 + cof17*x[0]**3*x[1]**2 + cof18*x[0]**4*x[1]**2 + cof19*x[0]**5*x[1]**2 + cof20*x[0]**6*x[1]**2 +
-            cof21*x[0]**0*x[1]**3 + cof22*x[0]**1*x[1]**3 + cof23*x[0]**2*x[1]**3 + cof24*x[0]**3*x[1]**3 + cof25*x[0]**4*x[1]**3 + cof26*x[0]**5*x[1]**3 + cof27*x[0]**6*x[1]**3 +
-            cof28*x[0]**0*x[1]**4 + cof29*x[0]**1*x[1]**4 + cof30*x[0]**2*x[1]**4 + cof31*x[0]**3*x[1]**4 + cof32*x[0]**4*x[1]**4 + cof33*x[0]**5*x[1]**4 + cof34*x[0]**6*x[1]**4 +
-            cof35*x[0]**0*x[1]**5 + cof36*x[0]**1*x[1]**5 + cof37*x[0]**2*x[1]**5 + cof38*x[0]**3*x[1]**5 + cof39*x[0]**4*x[1]**5 + cof40*x[0]**5*x[1]**5 + cof41*x[0]**6*x[1]**5 +
-            cof42*x[0]**0*x[1]**6 + cof43*x[0]**1*x[1]**6 + cof44*x[0]**2*x[1]**6 + cof45*x[0]**3*x[1]**6 + cof46*x[0]**4*x[1]**6 + cof47*x[0]**5*x[1]**6 + cof48*x[0]**6*x[1]**6 )
+    func = (cof[ 0]*x[0]**0*x[1]**0 + cof[ 1]*x[0]**1*x[1]**0 + cof[ 2]*x[0]**2*x[1]**0 + cof[ 3]*x[0]**3*x[1]**0 + cof[ 4]*x[0]**4*x[1]**0 +
+            cof[ 5]*x[0]**0*x[1]**1 + cof[ 6]*x[0]**1*x[1]**1 + cof[ 7]*x[0]**2*x[1]**1 + cof[ 8]*x[0]**3*x[1]**1 + cof[ 9]*x[0]**4*x[1]**1 + 
+            cof[10]*x[0]**0*x[1]**2 + cof[11]*x[0]**1*x[1]**2 + cof[12]*x[0]**2*x[1]**2 + cof[13]*x[0]**3*x[1]**2 + cof[14]*x[0]**4*x[1]**2 + 
+            cof[15]*x[0]**0*x[1]**3 + cof[16]*x[0]**1*x[1]**3 + cof[17]*x[0]**2*x[1]**3 + cof[18]*x[0]**3*x[1]**3 + cof[19]*x[0]**4*x[1]**3 + 
+            cof[20]*x[0]**0*x[1]**4 + cof[21]*x[0]**1*x[1]**4 + cof[22]*x[0]**2*x[1]**4 + cof[23]*x[0]**3*x[1]**4 + cof[24]*x[0]**4*x[1]**4 )
     
     return func
+
+def sixthfourhorder_ploy(x, cof):
+    """
+    Author: Nicholas Pike
+    Email: Nicholas.pike@smn.uio.no
+    
+    Purpose: Determine the 12th order polynomial of the free energy for a fixed
+             temperature. Note that coord is an array passed from the optimizer
+    
+    Output:  Returns function which is used by the optimizer to find the global minimum
+             
+    """    
+    # cof contains the fit coefficients of the 6th order polynomial of a and c
+    func = (cof[ 0]*x[0]**0*x[1]**0*x[2]**0 + cof[ 1]*x[0]**1*x[1]**0*x[2]**0 + cof[ 2]*x[0]**2*x[1]**0*x[2]**0 + cof[ 3]*x[0]**3*x[1]**0*x[2]**0 + cof[ 4]*x[0]**4*x[1]**0*x[2]**0 +
+            cof[ 5]*x[0]**0*x[1]**1*x[2]**0 + cof[ 6]*x[0]**1*x[1]**1*x[2]**0 + cof[ 7]*x[0]**2*x[1]**1*x[2]**0 + cof[ 8]*x[0]**3*x[1]**1*x[2]**0 + cof[ 9]*x[0]**4*x[1]**1*x[2]**0 + 
+            cof[10]*x[0]**0*x[1]**2*x[2]**0 + cof[11]*x[0]**1*x[1]**2*x[2]**0 + cof[12]*x[0]**2*x[1]**2*x[2]**0 + cof[13]*x[0]**3*x[1]**2*x[2]**0 + cof[14]*x[0]**4*x[1]**2*x[2]**0 + 
+            cof[15]*x[0]**0*x[1]**3*x[2]**0 + cof[16]*x[0]**1*x[1]**3*x[2]**0 + cof[17]*x[0]**2*x[1]**3*x[2]**0 + cof[18]*x[0]**3*x[1]**3*x[2]**0 + cof[19]*x[0]**4*x[1]**3*x[2]**0 + 
+            cof[20]*x[0]**0*x[1]**4*x[2]**0 + cof[21]*x[0]**1*x[1]**4*x[2]**0 + cof[22]*x[0]**2*x[1]**4*x[2]**0 + cof[23]*x[0]**3*x[1]**4*x[2]**0 + cof[24]*x[0]**4*x[1]**4*x[2]**0 + 
+    
+            cof[25]*x[0]**0*x[1]**0*x[2]**1 + cof[26]*x[0]**1*x[1]**0*x[2]**1 + cof[27]*x[0]**2*x[1]**0*x[2]**1 + cof[28]*x[0]**3*x[1]**0*x[2]**1 + cof[29]*x[0]**4*x[1]**0*x[2]**1 +
+            cof[30]*x[0]**0*x[1]**1*x[2]**1 + cof[31]*x[0]**1*x[1]**1*x[2]**1 + cof[32]*x[0]**2*x[1]**1*x[2]**1 + cof[33]*x[0]**3*x[1]**1*x[2]**1 + cof[34]*x[0]**4*x[1]**1*x[2]**1 + 
+            cof[35]*x[0]**0*x[1]**2*x[2]**1 + cof[36]*x[0]**1*x[1]**2*x[2]**1 + cof[37]*x[0]**2*x[1]**2*x[2]**1 + cof[38]*x[0]**3*x[1]**2*x[2]**1 + cof[39]*x[0]**4*x[1]**2*x[2]**1 + 
+            cof[40]*x[0]**0*x[1]**3*x[2]**1 + cof[41]*x[0]**1*x[1]**3*x[2]**1 + cof[42]*x[0]**2*x[1]**3*x[2]**1 + cof[43]*x[0]**3*x[1]**3*x[2]**1 + cof[44]*x[0]**4*x[1]**3*x[2]**1 + 
+            cof[45]*x[0]**0*x[1]**4*x[2]**1 + cof[46]*x[0]**1*x[1]**4*x[2]**1 + cof[47]*x[0]**2*x[1]**4*x[2]**1 + cof[48]*x[0]**3*x[1]**4*x[2]**1 + cof[49]*x[0]**4*x[1]**4*x[2]**1 +
+            
+            cof[50]*x[0]**0*x[1]**0*x[2]**2 + cof[51]*x[0]**1*x[1]**0*x[2]**2 + cof[52]*x[0]**2*x[1]**0*x[2]**2 + cof[53]*x[0]**3*x[1]**0*x[2]**2 + cof[54]*x[0]**4*x[1]**0*x[2]**2 +
+            cof[55]*x[0]**0*x[1]**1*x[2]**2 + cof[56]*x[0]**1*x[1]**1*x[2]**2 + cof[57]*x[0]**2*x[1]**1*x[2]**2 + cof[58]*x[0]**3*x[1]**1*x[2]**2 + cof[59]*x[0]**4*x[1]**1*x[2]**2 + 
+            cof[60]*x[0]**0*x[1]**2*x[2]**2 + cof[61]*x[0]**1*x[1]**2*x[2]**2 + cof[62]*x[0]**2*x[1]**2*x[2]**2 + cof[63]*x[0]**3*x[1]**2*x[2]**2 + cof[64]*x[0]**4*x[1]**2*x[2]**2 + 
+            cof[65]*x[0]**0*x[1]**3*x[2]**2 + cof[66]*x[0]**1*x[1]**3*x[2]**2 + cof[67]*x[0]**2*x[1]**3*x[2]**2 + cof[68]*x[0]**3*x[1]**3*x[2]**2 + cof[69]*x[0]**4*x[1]**3*x[2]**2 + 
+            cof[70]*x[0]**0*x[1]**4*x[2]**2 + cof[71]*x[0]**1*x[1]**4*x[2]**2 + cof[72]*x[0]**2*x[1]**4*x[2]**2 + cof[73]*x[0]**3*x[1]**4*x[2]**2 + cof[74]*x[0]**4*x[1]**4*x[2]**2 +
+            
+            cof[75]*x[0]**0*x[1]**0*x[2]**3 + cof[76]*x[0]**1*x[1]**0*x[2]**3 + cof[77]*x[0]**2*x[1]**0*x[2]**3 + cof[78]*x[0]**3*x[1]**0*x[2]**3 + cof[79]*x[0]**4*x[1]**0*x[2]**3 +
+            cof[80]*x[0]**0*x[1]**1*x[2]**3 + cof[81]*x[0]**1*x[1]**1*x[2]**3 + cof[82]*x[0]**2*x[1]**1*x[2]**3 + cof[83]*x[0]**3*x[1]**1*x[2]**3 + cof[84]*x[0]**4*x[1]**1*x[2]**3 + 
+            cof[85]*x[0]**0*x[1]**2*x[2]**3 + cof[86]*x[0]**1*x[1]**2*x[2]**3 + cof[87]*x[0]**2*x[1]**2*x[2]**3 + cof[88]*x[0]**3*x[1]**2*x[2]**3 + cof[89]*x[0]**4*x[1]**2*x[2]**3 + 
+            cof[90]*x[0]**0*x[1]**3*x[2]**3 + cof[91]*x[0]**1*x[1]**3*x[2]**3 + cof[92]*x[0]**2*x[1]**3*x[2]**3 + cof[93]*x[0]**3*x[1]**3*x[2]**3 + cof[94]*x[0]**4*x[1]**3*x[2]**3 + 
+            cof[95]*x[0]**0*x[1]**4*x[2]**3 + cof[96]*x[0]**1*x[1]**4*x[2]**3 + cof[97]*x[0]**2*x[1]**4*x[2]**3 + cof[98]*x[0]**3*x[1]**4*x[2]**3 + cof[99]*x[0]**4*x[1]**4*x[2]**3 +
+            
+            cof[100]*x[0]**0*x[1]**0*x[2]**4 + cof[101]*x[0]**1*x[1]**0*x[2]**4 + cof[102]*x[0]**2*x[1]**0*x[2]**4 + cof[103]*x[0]**3*x[1]**0*x[2]**4 + cof[104]*x[0]**4*x[1]**0*x[2]**4 +
+            cof[105]*x[0]**0*x[1]**1*x[2]**4 + cof[106]*x[0]**1*x[1]**1*x[2]**4 + cof[107]*x[0]**2*x[1]**1*x[2]**4 + cof[108]*x[0]**3*x[1]**1*x[2]**4 + cof[109]*x[0]**4*x[1]**1*x[2]**4 + 
+            cof[110]*x[0]**0*x[1]**2*x[2]**4 + cof[111]*x[0]**1*x[1]**2*x[2]**4 + cof[112]*x[0]**2*x[1]**2*x[2]**4 + cof[113]*x[0]**3*x[1]**2*x[2]**4 + cof[114]*x[0]**4*x[1]**2*x[2]**4 + 
+            cof[115]*x[0]**0*x[1]**3*x[2]**4 + cof[116]*x[0]**1*x[1]**3*x[2]**4 + cof[117]*x[0]**2*x[1]**3*x[2]**4 + cof[118]*x[0]**3*x[1]**3*x[2]**4 + cof[119]*x[0]**4*x[1]**3*x[2]**4 + 
+            cof[120]*x[0]**0*x[1]**4*x[2]**4 + cof[121]*x[0]**1*x[1]**4*x[2]**4 + cof[122]*x[0]**2*x[1]**4*x[2]**4 + cof[123]*x[0]**3*x[1]**4*x[2]**4 + cof[124]*x[0]**4*x[1]**4*x[2]**4 )
+    
+    
+    return func
+
+def running_mean(x, N):
+    """
+    From stackoverflow...  Why is this not a numpy function?
+    
+    """
+    out = np.zeros_like(x, dtype=np.float64)
+    dim_len = x.shape[0]
+    for i in range(dim_len):
+        if N%2 == 0:
+            a, b = i - (N-1)//2, i + (N-1)//2 + 2
+        else:
+            a, b = i - (N-1)//2, i + (N-1)//2 + 1
+
+        #cap indices to min and max indices
+        a = max(0, a)
+        b = min(dim_len, b)
+        out[i] = np.mean(x[a:b])
+        
+    return out
 
 def gen_GNUPLOT(plotfile,filename,numtoplot,plottype):
     """
@@ -1630,7 +1941,7 @@ def remove_file(filename):
     Purpose: Remove a file 
     """
     
-    bashrm = 'rm -r'+filename
+    bashrm = 'rm '+filename
     output = bash_commands(bashrm)
     
     return output
@@ -1793,7 +2104,7 @@ def generate_batch(batchtype,batchname,tags):
         f.write('cp -up KPOINTS $rlx_dir/\n')
         f.write('\n')
         f.write('cd $rlx_dir\n')
-        f.write('if [ -s "OUTCAR" ] && [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('if [ -s "OUTCAR" ] && [ `python ../../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
         f.write('    echo "Already converged, moving on"\n')
         f.write('else\n')
         f.write('\n')
@@ -1888,7 +2199,7 @@ def generate_batch(batchtype,batchname,tags):
         f.write('\n')
         f.write('fi\n')
         f.write('\n')
-        f.write('echo "Generatations of configurations complete. "\n')
+        f.write('echo "Generation of configurations complete. "\n')
         f.write('\n')
         f.close()
     
@@ -1909,7 +2220,6 @@ def generate_batch(batchtype,batchname,tags):
         f.write('natom='+natom_ss+'\n')
         f.write('n_configs='+n_configs+'\n')
         f.write('t_configs='+t_configs+'\n')
-        f.write('debye=%s\n'%debye)
         f.write('\n')
         f.write('echo "start relaxation of cell after cell parameter change"\n')
         f.write('mv POSCAR_* POSCAR\n')
@@ -1920,7 +2230,7 @@ def generate_batch(batchtype,batchname,tags):
         f.write('cp -up KPOINTS $rlx_dir/\n')
         f.write('\n')
         f.write('cd $rlx_dir\n')
-        f.write('if [ -s "OUTCAR" ] && [ `python ../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
+        f.write('if [ -s "OUTCAR" ] && [ `python ../../../ACTE.py --vasp_converge Relaxation` == "True" ] ; then\n')
         f.write('    echo "Already converged, moving on"\n')
         f.write('else\n')
         f.write('\n')
@@ -2015,7 +2325,7 @@ def generate_batch(batchtype,batchname,tags):
         f.write('\n')
         f.write('fi\n')
         f.write('\n')
-        f.write('echo "Generatations of configurations complete. "\n')
+        f.write('echo "Generation of configurations complete. "\n')
         f.write('\n')
         f.close()
         
@@ -2328,41 +2638,41 @@ def relaunch_configs(unstable_files,filenames):
     
     Return: None
     """
-    
     for i in range(len(unstable_files)):
         #Find what folder to look into.
         filenumber = unstable_files[i]
         
         #remove lines from data_extraction
-        g = open('results.txt','r')
+        g = open('data_extraction','r')
         lines = g.readlines()
         g.close()
         
         #now rewrite file 
-        g = open('results.txt','w')
+        g = open('data_extraction','w')
         for line in lines:
-            if not line.startswith('free_energies'):
+            if not line.startswith('free_energy_'):
                 g.write(line)
         g.close()
                     
         #remove file from free_energies folder
-        remove_file('free_energies/'+filenames[i])
+        remove_file('free_energies/*')
         
-        #move old free_energy file
-        move_file('lattice_'+filenumber+'/configs/outfile.free_energy','lattice_'+filenumber+'/configs/outfile.free_energy_old',False)
+        #remove old free_energy file
+        remove_file('lattice_'+str(int(filenumber))+'/configs/outfile.free_energy')
         
         #remove folders for configurations 
-        remove_file('lattice_'+filenumber+'/configs/conf00*')
+        remove_file('-r lattice_'+str(int(filenumber))+'/configs/conf00*')
         
         #generate files
         generate_batch('TDEP2','batch.sh','')
                     
         #move files
-        move_file('batch.sh','lattice_'+str(i),original=True)
+        move_file('batch.sh','lattice_'+str(int(filenumber)),original=False)
         
         #launch calculation
         launch_calc('lattice_'+str(i),'batch.sh')
         
+    sys.exit()    
     return None
 
 def vasp_converge(calctype):
@@ -2651,9 +2961,9 @@ def read_POSCAR():
                        f.write(POSCAR_store[j])
                poscarnames = np.append(poscarnames,'POSCAR_'+str(i))
                
-    elif diff_volumes == 49:
+    elif diff_volumes == 36:
        cc = 0
-       percent      = 0.008
+       percent      = 0.01
 
        if speccell == 0:
            numb = int(np.sqrt(diff_volumes))
@@ -2732,10 +3042,9 @@ def read_POSCAR():
                    poscarnames = np.append(poscarnames,'POSCAR_'+str(cc))
                    cc +=1                   
                            
-    elif diff_volumes == 343:
+    elif diff_volumes == 216:
        cc = 0
        percent      = 0.01
-
        if speccell == 0:
            numb = int(diff_volumes**(1.0/3.0))
            for i in range(numb):
@@ -2793,26 +3102,26 @@ def determine_volumes():
         and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
         and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #a and b are the same, c is different, 25 volumes , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 49
+       diff_volumes = 36
        speccell = 0
     elif ( np.abs(a-b)> difftol and np.abs(float(avec[1])) == np.abs(float(avec[2])) 
         and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
         and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #a and c are the same, b is different, 25 volumes , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 49
+       diff_volumes = 36
        speccell = 1
     elif ( np.abs(a-b)> difftol and np.abs(b -c)<= difftol 
         and np.abs(float(avec[1])) == np.abs(float(avec[2])) 
         and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
         and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #b and c are the same, a is different, 25 volumes , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 49
+       diff_volumes = 36
        speccell = 2        
     elif ( np.abs(a-b)<= difftol and np.abs(a-c)> difftol 
           and np.abs(np.abs(float(bvec[0])) -0.5*float(avec[0]))<=difftol
           and np.abs(float(bvec[1]) - np.sqrt(3.0)/2.0*float(avec[0]))<= difftol ):
         #a = b, and c different and bx = 0.5 ax and ax *sqrt(3)/2 = by
-        diff_volumes = 49
+        diff_volumes = 36
         speccell = 3
        
     elif ( np.abs(a-b)> difftol and np.abs(a-c)> difftol
@@ -2820,7 +3129,7 @@ def determine_volumes():
           and np.abs(float(bvec[0])) == np.abs(float(bvec[2])) 
           and np.abs(float(cvec[0])) == np.abs(float(cvec[1])) ):
        #all vectors are different, 75 volumes and , ax, by, and cz are the only non-zero lattice parameters
-       diff_volumes = 343
+       diff_volumes = 216
        speccell = 0
     else:
        print('Something bad happened, or differnet symmetry read in, when reading the POSCAR file')
@@ -3269,7 +3578,7 @@ def sortflags():
                                 with open('data_extraction','a') as f:
                                     f.write(newfilename+'\n')
                             
-                    elif diff_volumes == 49:
+                    elif diff_volumes == 36:
                         print('   Looking for %s different volume files...' %diff_volumes)
                         cc= 0
                         for i in range(int(np.sqrt(diff_volumes))):
@@ -3318,7 +3627,7 @@ def sortflags():
                                     with open('data_extraction','a') as f:
                                         f.write(newfilename+'\n')
                                 
-                    elif diff_volumes == 343:
+                    elif diff_volumes == 216:
                         print('   Looking for %s different volume files...' %diff_volumes)
                         cc= 0
                         for i in range(int(diff_volumes**(1/3))):
@@ -3413,19 +3722,6 @@ def sortflags():
             elif sys.argv[i] == '--outcar':
                 tagfound = True
                 gather_outcar()
-                i+=1
-                sys.exit()
-                
-            elif sys.argv[i] == '--thermal_test':
-                tagfound = True
-                try:
-                    DFT_INPUT = sys.argv[i+1]
-                except IndexError:
-                    DFT_INPUT = 'data_extraction'
-                #tags withbounds, withsolver,withbec,withDFTU0
-                tags = [True,False,True,False]
-
-                main_thermal(DFT_INPUT,tags)
                 i+=1
                 sys.exit()
                 
