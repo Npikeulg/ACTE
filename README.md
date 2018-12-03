@@ -45,7 +45,8 @@ There are currently no contributors to this program. However, if anyone would li
 
 ## Versioning
 
-0.0 - (00.00.0000) Initial production version of the program
+0.0 - Initial production version of the program
+
 ## Authors
 
 * **Nicholas Pike** - *Initial work* - Please email (Nicholas.pike at smn.uio.no) if you have questions, comments, or ideas.
@@ -54,9 +55,4 @@ There are currently no contributors to this program. However, if anyone would li
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
-
-
-
-
-
 
