@@ -4,7 +4,9 @@ This program contains an efficient algorithm for the calculation of the anisotro
 
 ## Getting Started
 
-A copy of this program can be obtained, with this readme file, from Github. After downloading, the user should modify the supercomputer requirements 
+A copy of this program can be obtained, with this readme file, from Github. After downloading, the user should modify the supercomputer requirements and point the script to the vasp and tdep executables.  
+
+A more detailed description of what is needed to run this script is found in the user manual.  See [USER_MANUAL.pdf](USER_MANUAL.pdf) for additional details.
 
 ### Prerequisites
 
