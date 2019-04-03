@@ -43,8 +43,8 @@ supercomputer.
 ###############################################################################
 """
 supercomputer_software = 'slurm' #'pbs'
-use_scratch            = 'yes'  # yes for stallo
-account_number         = 'nn2615k'
+use_scratch            = 'yes'  # yes is recommended
+account_number         = 'nnxxxx'
 account_email          = 'Nicholas.pike@smn.uio.no' 
 __root__               = os.getcwd()
     
@@ -79,15 +79,10 @@ t_configs = '0.8'       #temperature of configurations as a fraction of Debye te
 Paths to executables and main file name
 ##############################################################################
 """
-########## ABEL ######################
-VASPSR   = 'source /usit/abel/u1/espenfl/vasp/bin/.jobfile_local'  #source path to VASP executable
-TDEPSR   = '/usit/abel/u1/nicholasp/CODES/TDEP/tdep-devel/bin/'  #source path to TDEP bin of executables
-PYTHMOD  = 'module load Anaconda3/5.1.0\nmodule load hdf5/1.8.14_intel\nmodule load intel-libs/2016.2\nmodule load intelmpi.intel/5.0.2\nmodule unload intel/2015.1\nmodule load ifort/2017.1.132-GCC-5.4.0-2.26' #module for python
 
-########## STALLO ####################
-#VASPSR   = 'source /home/espenfl/vasp/bin/.jobfile_local'  #source path to VASP executable
-#TDEPSR   = '~nicholasp/bin/TDEP/bin/'  #source path to TDEP bin of executables
-#PYTHMOD  = 'module load StdEnv\nmodule load intel/2016b\nmodule load HDF5/1.8.17-intel-2016b\nmodule load Python/2.7.12-intel-2016b\n' #module for python
+VASPSR   = 'path to vasp source'  #source path to VASP executable
+TDEPSR   = 'path to tdep source'  #source path to TDEP bin of executables
+PYTHMOD  = 'path to python' #module for python
 
 """
 Begin modules used in this program
