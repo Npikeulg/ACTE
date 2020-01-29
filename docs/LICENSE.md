@@ -2,7 +2,7 @@
 
 MIT License
 
-Copyright (c) 2019 Nicholas Alan Pike
+Copyright (c) 2020 Nicholas Alan Pike
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
